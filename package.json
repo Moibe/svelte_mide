@@ -1,0 +1,23 @@
+{
+  "name": "svelte_mide",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Moibe/svelte_mide.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "Svelte chatbot interface for MIDE",
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^5.0.0",
+    "svelte": "^5.0.0",
+    "vite": "^6.3.0"
+  }
+}

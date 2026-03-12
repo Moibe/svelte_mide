@@ -1,0 +1,23 @@
+node_modules/
+dist/
+.DS_Store
+
+# Env files (contienen IPs internas)
+.env
+.env.local
+.env.development
+.env.staging
+.env.production
+.env.*.local
+
+# Editor
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+Thumbs.db
+
+# Vite
+*.local
