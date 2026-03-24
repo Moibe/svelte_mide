@@ -1,5 +1,5 @@
 <script>
-  import { tick } from 'svelte';
+  import { tick, onMount } from 'svelte';
 
   // ─── Sesión & Logs ───────────────────────────────────────────────
   const SESSION_ID = crypto.randomUUID();
@@ -82,6 +82,7 @@
     console.log(`🔄 Ambiente cambiado a: ${nuevoAmbiente}`);
     console.log(`📍 API URL: ${apiUrl.real}/chatbot`);
     cargarContextos();
+    verificarSalud();
   }
 
   // Exponer helpers de log en consola para depuración
@@ -101,6 +102,13 @@
     cargarContextos();
   });
 
+  // Carga contextos en admin cuando cambia el tab
+  $effect(() => {
+    if (activeTab === 'admin') {
+      cargarContextosAdmin();
+    }
+  });
+
   let messages = $state([
     {
       id: 1,
@@ -118,14 +126,141 @@
   let cargandoContextos = $state(false);
   let inputText = $state('');
   let isLoading = $state(false);
-  let chatContainer;
+  let chatContainer = $state(null);
+  let activeTab = $state('chat');
+  let adminTab = $state('contextos');
+  let administracionContextos = $state([]);
+  let cargandoAdminContextos = $state(false);
+  let errorAdminContextos = $state('');
+  let nuevoContextoNombre = $state('');
+  let nuevoContextoEmbedding = $state('');
+  let nuevoContextoChunkSize = $state('7500');
+  let cargandoCrearContexto = $state(false);
+  let mensajeCrearContexto = $state('');
+  let contextoABorrar = $state('');
+  let mostrarConfirmacionBorrar = $state(false);
+  let cargandoBorrarContexto = $state(false);
+  let mensajeBorrarContexto = $state('');
+  let administracionDocumentos = $state([]);
+  let cargandoAdminDocumentos = $state(false);
+  let documentoSeleccionadoParaBorrar = $state('');
+  let contextoSeleccionadoParaDocumentos = $state('');
+  let archivoParaIntegrar = $state(null);
+  let cargandoIntegrarDocumento = $state(false);
+  let progresoIntegrar = $state(0);
+  let mensajeIntegrarDocumento = $state('');
+  let cargandoBorrarDocumento = $state(false);
+  let mensajeBorrarDocumento = $state('');
+  let mostrarConfirmacionBorrarDocumento = $state(false);
+  let integracionEnCurso = $state(null);
+  let modelosDisponibles = $state([]);
+  let cargandoModelos = $state(false);
+  let errorModelos = $state('');
+  let modeloSeleccionado = $state(null);
+  let infoModeloSeleccionado = $state(null);
+  let cargandoInfoModelo = $state(false);
+  let estadoSalud = $state('checking'); // 'online', 'offline', 'checking'
+  let ultimaVerificacion = $state(null);
+  let timerVerificacion = null;
+  let debounceInputHealth = null;
+
+  function verificarSaludDesdeInput() {
+    clearTimeout(debounceInputHealth);
+    debounceInputHealth = setTimeout(verificarSalud, 500);
+  }
+
+  function reprogramarTimer() {
+    clearInterval(timerVerificacion);
+    const intervalo = estadoSalud === 'online' ? 60000 : 180000; // 1 min online, 3 min offline
+    timerVerificacion = setInterval(verificarSalud, intervalo);
+  }
+
+  async function verificarSalud() {
+    estadoSalud = 'checking';
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5000);
+      const res = await fetch(`${apiUrl.base}/health`, { signal: controller.signal });
+      clearTimeout(timeout);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      estadoSalud = data.status === 'ok' ? 'online' : 'offline';
+      ultimaVerificacion = new Date();
+    } catch (err) {
+      estadoSalud = 'offline';
+      ultimaVerificacion = new Date();
+    }
+    reprogramarTimer();
+  }
+
+  onMount(() => {
+    verificarSalud(); // incluye reprogramarTimer() al terminar
+    return () => clearInterval(timerVerificacion);
+  });
+
+  async function cargarModelos() {
+    cargandoModelos = true;
+    modelosDisponibles = [];
+    errorModelos = '';
+    modeloSeleccionado = null;
+    infoModeloSeleccionado = null;
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10000);
+      const res = await fetch(`${apiUrl.base}/listarModelos`, { signal: controller.signal });
+      clearTimeout(timeout);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      // Maneja array directo o {modelos: [...]}
+      if (Array.isArray(data)) {
+        modelosDisponibles = data;
+      } else if (data.modelos && Array.isArray(data.modelos)) {
+        modelosDisponibles = data.modelos;
+      } else {
+        modelosDisponibles = [];
+      }
+      console.log('%c🤖 Modelos cargados:', 'color:#0077ff;font-weight:bold', modelosDisponibles);
+    } catch (err) {
+      if (err.name === 'AbortError') {
+        errorModelos = '⏳ La API no respondió (tiempo de espera agotado). Intenta recargar en unos momentos.';
+        console.warn('%c⏳ Timeout al cargar modelos', 'color:orange;font-weight:bold');
+      } else {
+        errorModelos = `API ${ambienteSeleccionado.charAt(0).toUpperCase() + ambienteSeleccionado.slice(1)} offline`;
+        console.error('%c❌ Error al cargar modelos', 'color:red;font-weight:bold', err);
+      }
+    } finally {
+      cargandoModelos = false;
+    }
+  }
+
+  async function cargarInfoModelo(modelo) {
+    cargandoInfoModelo = true;
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10000);
+      const res = await fetch(`${apiUrl.base}/infoModelo/${encodeURIComponent(modelo)}`, { signal: controller.signal });
+      clearTimeout(timeout);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      infoModeloSeleccionado = data;
+      console.log('%c📋 Info modelo cargada:', 'color:#0077ff;font-weight:bold', data);
+    } catch (err) {
+      console.error('%c❌ Error al cargar info del modelo', 'color:red;font-weight:bold', err);
+      infoModeloSeleccionado = null;
+    } finally {
+      cargandoInfoModelo = false;
+    }
+  }
 
   async function cargarContextos() {
     cargandoContextos = true;
     contextos = [];
     contextoSeleccionado = '';
     try {
-      const res = await fetch(`${apiUrl.base}/listarContextos`);
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10000);
+      const res = await fetch(`${apiUrl.base}/listarContextos`, { signal: controller.signal });
+      clearTimeout(timeout);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       // La API devuelve { "Contextos existentes para este chatbot": { "nombre": {...}, ... } }
@@ -134,9 +269,330 @@
       contextoSeleccionado = contextos[0] ?? '';
       console.log('%c📂 Contextos cargados:', 'color:#c8102e;font-weight:bold', contextos);
     } catch (err) {
-      console.error('%c❌ Error al cargar contextos', 'color:red;font-weight:bold', err);
+      if (err.name === 'AbortError') {
+        console.warn('%c⏳ Timeout al cargar contextos — la API puede estar ocupada', 'color:orange;font-weight:bold');
+      } else {
+        console.error('%c❌ Error al cargar contextos', 'color:red;font-weight:bold', err);
+      }
     } finally {
       cargandoContextos = false;
+    }
+  }
+
+  async function cargarContextosAdmin() {
+    cargandoAdminContextos = true;
+    administracionContextos = [];
+    errorAdminContextos = '';
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10000);
+      const res = await fetch(`${apiUrl.base}/listarContextos`, { signal: controller.signal });
+      clearTimeout(timeout);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const mapa = data['Contextos existentes para este chatbot'] ?? {};
+      administracionContextos = Object.entries(mapa).map(([nombre, info]) => ({
+        nombre,
+        info: typeof info === 'object' ? info : {},
+        timestamp: new Date().toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })
+      }));
+      console.log('%c📂 Contextos Admin cargados:', 'color:#0077ff;font-weight:bold', administracionContextos);
+    } catch (err) {
+      if (err.name === 'AbortError') {
+        errorAdminContextos = '⏳ La API no respondió (tiempo de espera agotado). Puede estar ocupada procesando un documento. Intenta recargar en unos momentos.';
+        console.warn('%c⏳ Timeout al cargar contextos admin — la API puede estar ocupada', 'color:orange;font-weight:bold');
+      } else {
+        errorAdminContextos = `API ${ambienteSeleccionado.charAt(0).toUpperCase() + ambienteSeleccionado.slice(1)} offline`;
+        console.error('%c❌ Error al cargar contextos admin', 'color:red;font-weight:bold', err);
+      }
+    } finally {
+      cargandoAdminContextos = false;
+    }
+  }
+
+  async function crearContexto() {
+    if (!nuevoContextoNombre.trim()) {
+      mensajeCrearContexto = '❌ Ingresa un nombre para el contexto';
+      return;
+    }
+    if (!nuevoContextoEmbedding.trim()) {
+      mensajeCrearContexto = '❌ Ingresa el modelo de embedding';
+      return;
+    }
+
+    const chunkSizeNum = parseInt(nuevoContextoChunkSize, 10);
+    if (isNaN(chunkSizeNum) || chunkSizeNum < 1) {
+      mensajeCrearContexto = '❌ Chunk size debe ser un número válido mayor a 0';
+      return;
+    }
+
+    cargandoCrearContexto = true;
+    mensajeCrearContexto = '';
+
+    try {
+      const payload = {
+        nombre_contexto: nuevoContextoNombre.trim(),
+        embedding_model: nuevoContextoEmbedding.trim(),
+        chunk_size: chunkSizeNum
+      };
+
+      console.groupCollapsed(`%c📤 POST /crearContexto`, 'color:#0077ff;font-weight:bold;font-size:12px');
+      console.log('URL enviada :', `${apiUrl.real}/crearContexto`);
+      console.log('Payload     :', payload);
+      console.groupEnd();
+
+      const res = await fetch(`${apiUrl.base}/crearContexto`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) {
+        const errorBody = await res.text().catch(() => '(sin detalles)');
+        throw new Error(`HTTP ${res.status}: ${errorBody}`);
+      }
+
+      const data = await res.json();
+
+      console.groupCollapsed(`%c📥 Respuesta /crearContexto`, 'color:#16a34a;font-weight:bold;font-size:12px');
+      console.log('Status      :', res.status);
+      console.log('Respuesta   :', data);
+      console.groupEnd();
+
+      mensajeCrearContexto = `✅ Contexto "${nuevoContextoNombre}" creado exitosamente`;
+      nuevoContextoNombre = '';
+      nuevoContextoEmbedding = '';
+      nuevoContextoChunkSize = '7500';
+
+      // Recarga la lista después de 1 segundo
+      setTimeout(() => {
+        cargarContextosAdmin();
+      }, 1000);
+
+    } catch (err) {
+      console.error('%c❌ Error al crear contexto', 'color:red;font-weight:bold', err);
+      mensajeCrearContexto = `❌ Error: ${err.message}`;
+    } finally {
+      cargandoCrearContexto = false;
+    }
+  }
+
+  async function borrarContextoConfirmado() {
+    if (!contextoABorrar.trim()) {
+      mensajeBorrarContexto = '❌ Selecciona un contexto para borrar';
+      return;
+    }
+
+    cargandoBorrarContexto = true;
+    mensajeBorrarContexto = '';
+
+    try {
+      const payload = {
+        nombre_contexto: contextoABorrar.trim()
+      };
+
+      console.groupCollapsed(`%c📤 POST /borrarContexto`, 'color:#ff6b35;font-weight:bold;font-size:12px');
+      console.log('URL enviada :', `${apiUrl.real}/borrarContexto`);
+      console.log('Payload     :', payload);
+      console.groupEnd();
+
+      const res = await fetch(`${apiUrl.base}/borrarContexto`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) {
+        const errorBody = await res.text().catch(() => '(sin detalles)');
+        throw new Error(`HTTP ${res.status}: ${errorBody}`);
+      }
+
+      const data = await res.json();
+
+      console.groupCollapsed(`%c📥 Respuesta /borrarContexto`, 'color:#16a34a;font-weight:bold;font-size:12px');
+      console.log('Status      :', res.status);
+      console.log('Respuesta   :', data);
+      console.groupEnd();
+
+      mensajeBorrarContexto = `✅ Contexto "${contextoABorrar}" borrado exitosamente`;
+      contextoABorrar = '';
+      mostrarConfirmacionBorrar = false;
+
+      // Recarga la lista después de 1 segundo
+      setTimeout(() => {
+        cargarContextosAdmin();
+      }, 1000);
+
+    } catch (err) {
+      console.error('%c❌ Error al borrar contexto', 'color:red;font-weight:bold', err);
+      mensajeBorrarContexto = `❌ Error: ${err.message}`;
+    } finally {
+      cargandoBorrarContexto = false;
+    }
+  }
+
+  async function cargarDocumentosAdmin(contexto) {
+    if (!contexto.trim()) {
+      mensajeIntegrarDocumento = '❌ Selecciona un contexto primero';
+      return;
+    }
+
+    cargandoAdminDocumentos = true;
+    administracionDocumentos = [];
+
+    try {
+      const res = await fetch(`${apiUrl.base}/listarDocumentos?contexto=${encodeURIComponent(contexto)}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      // La API devuelve { contexto, documentos: [...], conteo }
+      administracionDocumentos = Array.isArray(data.documentos) ? data.documentos : [];
+      console.log('%c📄 Documentos cargados:', 'color:#0077ff;font-weight:bold', administracionDocumentos);
+    } catch (err) {
+      console.error('%c❌ Error al cargar documentos', 'color:red;font-weight:bold', err);
+    } finally {
+      cargandoAdminDocumentos = false;
+    }
+  }
+
+  async function integrarDocumento() {
+    if (!contextoSeleccionadoParaDocumentos.trim()) {
+      mensajeIntegrarDocumento = '❌ Selecciona un contexto';
+      return;
+    }
+    if (!archivoParaIntegrar) {
+      mensajeIntegrarDocumento = '❌ Selecciona un archivo';
+      return;
+    }
+
+    cargandoIntegrarDocumento = true;
+    progresoIntegrar = 0;
+    mensajeIntegrarDocumento = '';
+
+    // Guardar en localStorage que hay una integración en curso
+    const infoIntegracion = {
+      archivo: archivoParaIntegrar.name,
+      contexto: contextoSeleccionadoParaDocumentos,
+      inicio: new Date().toISOString()
+    };
+    localStorage.setItem('mide_integracion_pendiente', JSON.stringify(infoIntegracion));
+    integracionEnCurso = infoIntegracion;
+
+    try {
+      const formData = new FormData();
+      formData.append('documento', archivoParaIntegrar);
+
+      const fetchUrl = `${apiUrl.base}/integrarDocumento?contexto=${encodeURIComponent(contextoSeleccionadoParaDocumentos)}`;
+
+      console.groupCollapsed(`%c📤 POST /integrarDocumento`, 'color:#0077ff;font-weight:bold;font-size:12px');
+      console.log('URL enviada :', `${apiUrl.real}/integrarDocumento`);
+      console.log('Contexto   :', contextoSeleccionadoParaDocumentos);
+      console.log('Archivo    :', archivoParaIntegrar.name);
+      console.groupEnd();
+
+      const nombreArchivo = archivoParaIntegrar.name;
+
+      await new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', fetchUrl);
+
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable) {
+            progresoIntegrar = Math.round((e.loaded / e.total) * 100);
+          }
+        };
+
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            progresoIntegrar = 100;
+            try {
+              const data = JSON.parse(xhr.responseText);
+              console.groupCollapsed(`%c📥 Respuesta /integrarDocumento`, 'color:#16a34a;font-weight:bold;font-size:12px');
+              console.log('Status      :', xhr.status);
+              console.log('Respuesta   :', data);
+              console.groupEnd();
+            } catch (_) {}
+            resolve();
+          } else {
+            reject(new Error(`HTTP ${xhr.status}: ${xhr.responseText || '(sin detalles)'}`))
+          }
+        };
+
+        xhr.onerror = () => reject(new Error('Error de red al enviar el archivo'));
+        xhr.send(formData);
+      });
+
+      mensajeIntegrarDocumento = `✅ Documento "${nombreArchivo}" integrado exitosamente`;
+      archivoParaIntegrar = null;
+      localStorage.removeItem('mide_integracion_pendiente');
+      integracionEnCurso = null;
+
+      // Recarga la lista después de 1 segundo
+      setTimeout(() => {
+        cargarDocumentosAdmin(contextoSeleccionadoParaDocumentos);
+      }, 1000);
+
+    } catch (err) {
+      console.error('%c❌ Error al integrar documento', 'color:red;font-weight:bold', err);
+      mensajeIntegrarDocumento = `❌ Error: ${err.message}`;
+    } finally {
+      cargandoIntegrarDocumento = false;
+      localStorage.removeItem('mide_integracion_pendiente');
+      integracionEnCurso = null;
+    }
+  }
+
+  async function borrarDocumentoConfirmado() {
+    if (!documentoSeleccionadoParaBorrar.trim()) {
+      mensajeBorrarDocumento = '❌ Selecciona un documento para borrar';
+      return;
+    }
+
+    cargandoBorrarDocumento = true;
+    mensajeBorrarDocumento = '';
+
+    try {
+      const payload = {
+        filename: documentoSeleccionadoParaBorrar.trim(),
+        contexto: contextoSeleccionadoParaDocumentos.trim()
+      };
+
+      console.groupCollapsed(`%c📤 DELETE /quitarDocumento`, 'color:#ff6b35;font-weight:bold;font-size:12px');
+      console.log('URL enviada :', `${apiUrl.real}/quitarDocumento`);
+      console.log('Payload     :', payload);
+      console.groupEnd();
+
+      const res = await fetch(`${apiUrl.base}/quitarDocumento`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) {
+        const errorBody = await res.text().catch(() => '(sin detalles)');
+        throw new Error(`HTTP ${res.status}: ${errorBody}`);
+      }
+
+      const data = await res.json();
+
+      console.groupCollapsed(`%c📥 Respuesta /quitarDocumento`, 'color:#16a34a;font-weight:bold;font-size:12px');
+      console.log('Status      :', res.status);
+      console.log('Respuesta   :', data);
+      console.groupEnd();
+
+      mensajeBorrarDocumento = `✅ Documento "${documentoSeleccionadoParaBorrar}" borrado exitosamente`;
+      documentoSeleccionadoParaBorrar = '';
+      mostrarConfirmacionBorrarDocumento = false;
+
+      // Recarga la lista después de 1 segundo
+      setTimeout(() => {
+        cargarDocumentosAdmin(contextoSeleccionadoParaDocumentos);
+      }, 1000);
+
+    } catch (err) {
+      console.error('%c❌ Error al borrar documento', 'color:red;font-weight:bold', err);
+      mensajeBorrarDocumento = `❌ Error: ${err.message}`;
+    } finally {
+      cargandoBorrarDocumento = false;
     }
   }
 
@@ -279,7 +735,7 @@
   }
 </script>
 
-<div class="app">
+<div class="app" class:admin={activeTab === 'admin'}>
   <!-- Header -->
   <header class="header">
     <div class="header-left">
@@ -290,9 +746,15 @@
       </div>
       <div class="header-info">
         <h1 class="header-title">Asistente MIDE</h1>
-        <span class="header-status">
-          <span class="status-dot"></span>
-          En línea
+        <span class="header-status" onclick={verificarSalud} title="Click para verificar conexión" role="button" tabindex="0">
+          <span class="status-dot" class:online={estadoSalud === 'online'} class:offline={estadoSalud === 'offline'} class:checking={estadoSalud === 'checking'}></span>
+          {#if estadoSalud === 'online'}
+            En línea
+          {:else if estadoSalud === 'offline'}
+            Desconectado
+          {:else}
+            Verificando...
+          {/if}
         </span>
       </div>
       <div class="ambiente-toggle">
@@ -331,11 +793,26 @@
       {/each}
     </div>
     <div class="header-logo">MIDE</div>
+    <div class="tabs-toggle">
+      <button
+        class="tab-btn"
+        class:active={activeTab === 'chat'}
+        onclick={() => { activeTab = 'chat'; verificarSalud(); }}
+        aria-pressed={activeTab === 'chat'}
+      >💬 Chatbot</button>
+      <button
+        class="tab-btn"
+        class:active={activeTab === 'admin'}
+        onclick={() => { activeTab = 'admin'; verificarSalud(); }}
+        aria-pressed={activeTab === 'admin'}
+      >⚙️ Administración</button>
+    </div>
   </header>
 
   <!-- Chat body -->
-  <main class="chat-body" bind:this={chatContainer}>
-    <div class="messages">
+  {#if activeTab === 'chat'}
+    <main class="chat-body" bind:this={chatContainer}>
+      <div class="messages">
       {#each messages as msg (msg.id)}
         <div class="message-row {msg.role}" class:error={msg.isError}>
           {#if msg.role === 'bot'}
@@ -368,13 +845,17 @@
       {/if}
     </div>
   </main>
+  {/if}
 
   <!-- Input area -->
+  {#if activeTab === 'chat'}
   <footer class="input-area">
     <div class="input-container">
       <textarea
         bind:value={inputText}
         onkeydown={handleKeydown}
+        onfocus={verificarSalud}
+        oninput={verificarSaludDesdeInput}
         placeholder="Escribe tu mensaje..."
         rows="1"
         disabled={isLoading}
@@ -391,6 +872,474 @@
     </div>
     <p class="disclaimer">MIDE · Museo Interactivo de Economía</p>
   </footer>
+  {/if}
+
+  <!-- Admin section -->
+  {#if activeTab === 'admin'}
+    <main class="admin-body">
+      <div class="admin-container">
+
+        <!-- Banner de integración en curso -->
+        {#if integracionEnCurso && !cargandoIntegrarDocumento}
+          <div class="banner-integracion">
+            <div class="banner-integracion-icon">⏳</div>
+            <div class="banner-integracion-text">
+              <strong>Integración en curso</strong>
+              <p>El documento <strong>"{integracionEnCurso.archivo}"</strong> se está procesando en el contexto <strong>"{integracionEnCurso.contexto}"</strong>. La API puede tardar en responder a otras peticiones.</p>
+              <button class="banner-dismiss-btn" onclick={() => { localStorage.removeItem('mide_integracion_pendiente'); integracionEnCurso = null; }}>✕ Descartar</button>
+            </div>
+          </div>
+        {/if}
+
+        <!-- Mensaje de Error Global -->
+        {#if errorAdminContextos}
+          <div style="margin-bottom: 1.5rem; padding: 1rem; background: rgba(255,170,0,0.1); border-left: 4px solid rgba(255,170,0,0.7); border-radius: 8px;">
+            <p style="color: rgba(255,200,0,0.9); font-size: 0.95rem; line-height: 1.5; margin: 0;">❌ {errorAdminContextos}</p>
+          </div>
+        {/if}
+
+        <!-- Sub-tab bar -->
+        <div class="admin-subtabs">
+          <button
+            class="admin-subtab-btn"
+            class:active={adminTab === 'dashboard'}
+            onclick={() => adminTab = 'dashboard'}
+          >
+            📊 Dashboard
+          </button>
+          <button
+            class="admin-subtab-btn"
+            class:active={adminTab === 'contextos'}
+            onclick={() => adminTab = 'contextos'}
+          >
+            📂 Contextos
+          </button>
+          <button
+            class="admin-subtab-btn"
+            class:active={adminTab === 'documentos'}
+            onclick={() => adminTab = 'documentos'}
+          >
+            📄 Documentos
+          </button>
+          <button
+            class="admin-subtab-btn"
+            class:active={adminTab === 'modelos'}
+            onclick={() => { adminTab = 'modelos'; cargarModelos(); }}
+          >
+            🤖 Modelos
+          </button>
+        </div>
+
+        <!-- Dashboard -->
+        {#if adminTab === 'dashboard'}
+          <div class="admin-grid">
+            <div class="admin-card">
+              <h3>📋 Logs</h3>
+              <p>Total registros en sesión: <strong>{logs.length}</strong></p>
+              <button onclick={() => console.table(logs)} class="admin-action-btn">
+                Ver en consola
+              </button>
+            </div>
+            <div class="admin-card">
+              <h3>🔑 Sesión Actual</h3>
+              <p><code>{SESSION_ID}</code></p>
+              <button onclick={() => navigator.clipboard.writeText(SESSION_ID)} class="admin-action-btn">
+                Copiar UUID
+              </button>
+            </div>
+            <div class="admin-card">
+              <h3>🌐 Ambiente</h3>
+              <p>{ambienteSeleccionado}</p>
+              <p style="font-size: 0.85rem; color: rgba(255,255,255,0.6);">{apiUrl.real}</p>
+            </div>
+            <div class="admin-card">
+              <h3>🤖 Modelo Activo</h3>
+              <p>{modelo}</p>
+            </div>
+          </div>
+          {#if logs.length > 0}
+            <div class="logs-table-wrap">
+              <h3>Últimos Logs</h3>
+              <div class="logs-table">
+                {#each logs.slice(-5).reverse() as log (log.fecha + log.sesion)}
+                  <div class="log-row">
+                    <span class="log-fecha">{new Date(log.fecha).toLocaleTimeString('es-MX', {hour:'2-digit', minute:'2-digit', second:'2-digit'})}</span>
+                    <span class="log-pregunta">{log.pregunta.substring(0, 40)}...</span>
+                    <span class="log-ms">{log.ms}ms</span>
+                    <span class="log-error" class:has-error={log.error}>{log.error || '✓'}</span>
+                  </div>
+                {/each}
+              </div>
+            </div>
+          {/if}
+        {/if}
+
+        <!-- Contextos -->
+        {#if adminTab === 'contextos'}
+          <div class="contextos-table-wrap">
+            <div class="seccion-header">
+              <h3>📂 Contextos Disponibles</h3>
+              <button onclick={cargarContextosAdmin} class="admin-action-btn" disabled={cargandoAdminContextos}>
+                🔄 Recargar
+              </button>
+            </div>
+            {#if cargandoAdminContextos}
+              <p style="color: rgba(255,255,255,0.6); font-size: 0.9rem; padding: 1rem 0;">⟳ Cargando contextos...</p>
+            {:else if administracionContextos.length === 0}
+              <p style="color: rgba(255,255,255,0.6); font-size: 0.9rem; padding: 1rem 0;">No hay contextos disponibles</p>
+            {:else}
+              <div class="contextos-table">
+                {#each administracionContextos as contexto (contexto.nombre)}
+                  <div class="contexto-row">
+                    <span class="contexto-nombre">{contexto.nombre}</span>
+                  </div>
+                {/each}
+              </div>
+            {/if}
+          </div>
+
+          <div class="crear-contexto-wrap">
+            <h3>➕ Crear Nuevo Contexto</h3>
+            <div class="crear-contexto-form">
+              <div class="form-field">
+                <label for="contexto-nombre">Nombre del Contexto</label>
+                <input
+                  id="contexto-nombre"
+                  type="text"
+                  placeholder="ej: historia-mide"
+                  bind:value={nuevoContextoNombre}
+                  disabled={cargandoCrearContexto}
+                  class="contexto-input"
+                />
+              </div>
+              <div class="form-field">
+                <label for="contexto-embedding">Modelo de Embedding</label>
+                <input
+                  id="contexto-embedding"
+                  type="text"
+                  placeholder="ej: text-embedding-ada-002"
+                  bind:value={nuevoContextoEmbedding}
+                  disabled={cargandoCrearContexto}
+                  class="contexto-input"
+                />
+              </div>
+              <div class="form-field">
+                <label for="contexto-chunk-size">Chunk Size (tokens)</label>
+                <input
+                  id="contexto-chunk-size"
+                  type="number"
+                  value={nuevoContextoChunkSize}
+                  onchange={(e) => nuevoContextoChunkSize = e.target.value}
+                  disabled={cargandoCrearContexto}
+                  class="contexto-input"
+                  min="1"
+                />
+              </div>
+              <button
+                onclick={crearContexto}
+                disabled={cargandoCrearContexto || !nuevoContextoNombre.trim() || !nuevoContextoEmbedding.trim()}
+                class="crear-contexto-btn"
+              >
+                {cargandoCrearContexto ? '⟳ Creando...' : '✓ Crear'}
+              </button>
+            </div>
+            {#if mensajeCrearContexto}
+              <p class="mensaje-contexto" class:success={mensajeCrearContexto.includes('✅')}>
+                {mensajeCrearContexto}
+              </p>
+            {/if}
+          </div>
+
+          <div class="borrar-contexto-wrap">
+            <h3>🗑️ Borrar Contexto</h3>
+            <div class="borrar-contexto-form">
+              <div class="form-field" style="flex: 1;">
+                <label for="contexto-a-borrar">Selecciona contexto</label>
+                <select
+                  id="contexto-a-borrar"
+                  bind:value={contextoABorrar}
+                  disabled={cargandoBorrarContexto || administracionContextos.length === 0}
+                  class="contexto-select"
+                >
+                  <option value="">-- Selecciona un contexto --</option>
+                  {#each administracionContextos as contexto (contexto.nombre)}
+                    <option value={contexto.nombre}>{contexto.nombre}</option>
+                  {/each}
+                </select>
+              </div>
+              <button
+                onclick={() => mostrarConfirmacionBorrar = true}
+                disabled={cargandoBorrarContexto || !contextoABorrar.trim()}
+                class="borrar-contexto-btn"
+              >
+                🗑️ Borrar
+              </button>
+            </div>
+            {#if mensajeBorrarContexto}
+              <p class="mensaje-contexto" class:success={mensajeBorrarContexto.includes('✅')}>
+                {mensajeBorrarContexto}
+              </p>
+            {/if}
+          </div>
+        {/if}
+
+        <!-- Documentos -->
+        {#if adminTab === 'documentos'}
+          <div class="documentos-wrap">
+            <div class="seccion-header">
+              <h3>📄 Documentos por Contexto</h3>
+              <button onclick={() => cargarDocumentosAdmin(contextoSeleccionadoParaDocumentos)} class="admin-action-btn" disabled={cargandoAdminDocumentos}>
+                🔄 Recargar
+              </button>
+            </div>
+
+            <!-- Selector de contexto -->
+            <div class="documentos-contexto-select">
+              <label for="doc-contexto">Selecciona contexto:</label>
+              <select
+                id="doc-contexto"
+                bind:value={contextoSeleccionadoParaDocumentos}
+                onchange={() => cargarDocumentosAdmin(contextoSeleccionadoParaDocumentos)}
+                class="contexto-select"
+              >
+                <option value="">-- Selecciona un contexto --</option>
+                {#each administracionContextos as contexto (contexto.nombre)}
+                  <option value={contexto.nombre}>{contexto.nombre}</option>
+                {/each}
+              </select>
+            </div>
+
+            <!-- Lista de documentos -->
+            {#if contextoSeleccionadoParaDocumentos}
+              <div class="documentos-list-wrap">
+                <h4>Documentos del contexto: <strong>{contextoSeleccionadoParaDocumentos}</strong></h4>
+                {#if cargandoAdminDocumentos}
+                  <p style="color: rgba(255,255,255,0.6); font-size: 0.9rem; padding: 1rem 0;">⟳ Cargando documentos...</p>
+                {:else if administracionDocumentos.length === 0}
+                  <p style="color: rgba(255,255,255,0.6); font-size: 0.9rem; padding: 1rem 0;">No hay documentos en este contexto</p>
+                {:else}
+                  <div class="documentos-table">
+                    {#each administracionDocumentos as doc (doc)}
+                      <div class="documento-row">
+                        <span class="documento-nombre">📋 {doc}</span>
+                      </div>
+                    {/each}
+                  </div>
+                {/if}
+              </div>
+            {/if}
+          </div>
+
+          <!-- Integrar Documento -->
+          <div class="integrar-documento-wrap">
+            <h3>📤 Integrar Nuevo Documento</h3>
+            <div class="integrar-documento-form">
+              <div class="form-field">
+                <label for="doc-contexto-integrar">Contexto destino</label>
+                <select
+                  id="doc-contexto-integrar"
+                  bind:value={contextoSeleccionadoParaDocumentos}
+                  disabled={cargandoIntegrarDocumento}
+                  class="contexto-select"
+                >
+                  <option value="">-- Selecciona un contexto --</option>
+                  {#each administracionContextos as contexto (contexto.nombre)}
+                    <option value={contexto.nombre}>{contexto.nombre}</option>
+                  {/each}
+                </select>
+              </div>
+              <div class="form-field">
+                <label for="doc-archivo">Selecciona archivo</label>
+                <input
+                  id="doc-archivo"
+                  type="file"
+                  onchange={(e) => {
+                    const files = e.target.files;
+                    archivoParaIntegrar = files && files[0] ? files[0] : null;
+                  }}
+                  disabled={cargandoIntegrarDocumento}
+                  accept=".txt,.pdf,.doc,.docx"
+                  class="documento-input"
+                />
+                {#if archivoParaIntegrar}
+                  <small>Archivo: {archivoParaIntegrar.name} ({(archivoParaIntegrar.size / 1024).toFixed(2)} KB)</small>
+                {/if}
+              </div>
+              <button
+                onclick={integrarDocumento}
+                disabled={cargandoIntegrarDocumento || !contextoSeleccionadoParaDocumentos.trim() || !archivoParaIntegrar}
+                class="integrar-documento-btn"
+              >
+                {cargandoIntegrarDocumento ? '⟳ Procesando...' : '✓ Integrar'}
+              </button>
+            </div>
+
+            {#if cargandoIntegrarDocumento}
+              <div class="progreso-wrap">
+                <div class="progreso-bar indeterminate"></div>
+              </div>
+            {:else if progresoIntegrar === 100}
+              <div class="progreso-wrap">
+                <div class="progreso-bar done"></div>
+              </div>
+            {/if}
+
+            {#if mensajeIntegrarDocumento}
+              <p class="mensaje-documento" class:success={mensajeIntegrarDocumento.includes('✅')}>
+                {mensajeIntegrarDocumento}
+              </p>
+            {/if}
+          </div>
+
+          <!-- Borrar Documento -->
+          <div class="borrar-documento-wrap">
+            <h3>🗑️ Borrar Documento</h3>
+            <div class="borrar-documento-form">
+              <div class="form-field" style="flex: 1;">
+                <label for="doc-a-borrar">Selecciona documento</label>
+                <select
+                  id="doc-a-borrar"
+                  bind:value={documentoSeleccionadoParaBorrar}
+                  disabled={cargandoBorrarDocumento || administracionDocumentos.length === 0}
+                  class="contexto-select"
+                >
+                  <option value="">-- Selecciona un documento --</option>
+                  {#each administracionDocumentos as doc (doc)}
+                    <option value={doc}>{doc}</option>
+                  {/each}
+                </select>
+              </div>
+              <button
+                onclick={() => mostrarConfirmacionBorrarDocumento = true}
+                disabled={cargandoBorrarDocumento || !documentoSeleccionadoParaBorrar.trim()}
+                class="borrar-documento-btn"
+              >
+                🗑️ Borrar
+              </button>
+            </div>
+            {#if mensajeBorrarDocumento}
+              <p class="mensaje-documento" class:success={mensajeBorrarDocumento.includes('✅')}>
+                {mensajeBorrarDocumento}
+              </p>
+            {/if}
+          </div>
+
+          <!-- Confirmación Modal para Borrar Documento -->
+          {#if mostrarConfirmacionBorrarDocumento}
+            <div class="modal-overlay">
+              <div class="modal-content">
+                <h3>⚠️ Confirmar Borrado de Documento</h3>
+                <p>
+                  ¿Estás seguro de que deseas borrar el documento <strong>"{documentoSeleccionadoParaBorrar}"</strong> del contexto <strong>"{contextoSeleccionadoParaDocumentos}"</strong>?
+                </p>
+                <p style="font-size: 0.85rem; color: rgba(255,255,255,0.6);">
+                  Esta acción es irreversible.
+                </p>
+                <div class="modal-buttons">
+                  <button
+                    onclick={() => mostrarConfirmacionBorrarDocumento = false}
+                    disabled={cargandoBorrarDocumento}
+                    class="modal-btn cancel"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    onclick={borrarDocumentoConfirmado}
+                    disabled={cargandoBorrarDocumento}
+                    class="modal-btn danger"
+                  >
+                    {cargandoBorrarDocumento ? '⟳ Borrando...' : 'Sí, borrar'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          {/if}
+        {/if}
+
+        <!-- Modelos -->
+        {#if adminTab === 'modelos'}
+          <div class="modelos-wrap">
+            <div class="seccion-header">
+              <h3>🤖 Modelos Disponibles</h3>
+              <button onclick={cargarModelos} class="admin-action-btn" disabled={cargandoModelos}>
+                🔄 Recargar
+              </button>
+            </div>
+
+            {#if cargandoModelos}
+              <p style="color: rgba(255,255,255,0.6); font-size: 0.9rem; padding: 1rem 0;">⟳ Cargando modelos...</p>
+            {:else if errorModelos}
+              <p style="color: rgba(255,200,0,0.9); font-size: 0.9rem; padding: 1rem; background: rgba(255,170,0,0.1); border-left: 3px solid rgba(255,170,0,0.7); border-radius: 4px; line-height: 1.5;">{errorModelos}</p>
+            {:else if modelosDisponibles.length === 0}
+              <p style="color: rgba(255,255,255,0.6); font-size: 0.9rem; padding: 1rem 0;">No hay modelos disponibles</p>
+            {:else}
+              <div class="modelos-grid">
+                {#each modelosDisponibles as modelo (modelo)}
+                  <button
+                    class="modelo-card"
+                    class:active={modeloSeleccionado === modelo}
+                    onclick={() => { modeloSeleccionado = modelo; cargarInfoModelo(modelo); }}
+                  >
+                    <span class="modelo-nombre">{modelo}</span>
+                  </button>
+                {/each}
+              </div>
+            {/if}
+
+            {#if modeloSeleccionado && infoModeloSeleccionado}
+              <div class="modelo-detalle">
+                <h4>📋 Detalles de <strong>"{modeloSeleccionado}"</strong></h4>
+                {#if cargandoInfoModelo}
+                  <p style="color: rgba(255,255,255,0.6); font-size: 0.9rem;">⟳ Cargando información...</p>
+                {:else}
+                  <div class="modelo-propiedades">
+                    {#each Object.entries(infoModeloSeleccionado) as [key, value]}
+                      <div class="propiedad-item">
+                        <span class="propiedad-key">{key}:</span>
+                        <span class="propiedad-value">{typeof value === 'object' ? JSON.stringify(value) : String(value)}</span>
+                      </div>
+                    {/each}
+                  </div>
+                {/if}
+              </div>
+            {/if}
+          </div>
+        {/if}
+
+        <!-- Confirmación Modal -->
+        {#if mostrarConfirmacionBorrar}
+          <div class="modal-overlay">
+            <div class="modal-content">
+              <h3>⚠️ Confirmar Borrado</h3>
+              <p>
+                ¿Estás seguro de que deseas borrar el contexto <strong>"{contextoABorrar}"</strong>?
+              </p>
+              <p style="font-size: 0.85rem; color: rgba(255,255,255,0.6);">
+                Esta acción es irreversible.
+              </p>
+              <div class="modal-buttons">
+                <button
+                  onclick={() => mostrarConfirmacionBorrar = false}
+                  disabled={cargandoBorrarContexto}
+                  class="modal-btn cancel"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onclick={borrarContextoConfirmado}
+                  disabled={cargandoBorrarContexto}
+                  class="modal-btn danger"
+                >
+                  {cargandoBorrarContexto ? '⟳ Borrando...' : 'Sí, borrar'}
+                </button>
+              </div>
+            </div>
+          </div>
+        {/if}
+
+      </div>
+    </main>
+  {/if}
 </div>
 
 <style>
@@ -417,6 +1366,11 @@
     flex-direction: column;
     height: 100dvh;
     background: linear-gradient(160deg, #6b0016 0%, #a80028 30%, #c8102e 60%, #e0154a 100%);
+    transition: background 0.5s ease;
+  }
+
+  .app.admin {
+    background: linear-gradient(160deg, #001a4d 0%, #003d99 30%, #0055cc 60%, #0077ff 100%);
   }
 
   /* ── Header ─────────────────────────────────────── */
@@ -474,6 +1428,14 @@
     gap: 5px;
     font-size: 0.75rem;
     color: rgba(255, 255, 255, 0.75);
+    cursor: pointer;
+    border-radius: 6px;
+    padding: 2px 6px;
+    transition: background 0.2s ease;
+  }
+
+  .header-status:hover {
+    background: rgba(255, 255, 255, 0.12);
   }
 
   .status-dot {
@@ -483,6 +1445,23 @@
     background: #4ade80;
     box-shadow: 0 0 6px #4ade80;
     animation: pulse 2s ease-in-out infinite;
+  }
+
+  .status-dot.online {
+    background: #4ade80;
+    box-shadow: 0 0 6px #4ade80;
+  }
+
+  .status-dot.offline {
+    background: #ef4444;
+    box-shadow: 0 0 6px #ef4444;
+    animation: none;
+  }
+
+  .status-dot.checking {
+    background: #facc15;
+    box-shadow: 0 0 6px #facc15;
+    animation: pulse 1s ease-in-out infinite;
   }
 
   @keyframes pulse {
@@ -777,7 +1756,7 @@
     cursor: not-allowed;
   }
 
-  button {
+  .input-container button {
     width: 42px;
     height: 42px;
     border-radius: 50%;
@@ -793,17 +1772,17 @@
     box-shadow: 0 2px 8px rgba(0,0,0,0.2);
   }
 
-  button svg {
+  .input-container button svg {
     width: 20px;
     height: 20px;
   }
 
-  button:hover:not(:disabled) {
+  .input-container button:hover:not(:disabled) {
     transform: scale(1.08);
     background: #f0f0f0;
   }
 
-  button:active:not(:disabled) {
+  .input-container button:active:not(:disabled) {
     transform: scale(0.95);
   }
 
@@ -875,6 +1854,1022 @@
     font-size: 0.75rem;
     color: rgba(255, 255, 255, 0.35);
     font-style: italic;
+  }
+
+  /* ── Tabs toggle ────────────────────────────────── */
+  .tabs-toggle {
+    display: flex;
+    gap: 0;
+    background: transparent;
+    padding: 0;
+    border-radius: 0;
+    border: none;
+    margin-left: auto;
+    border-bottom: 2px solid rgba(255, 255, 255, 0.2);
+  }
+
+  .tab-btn {
+    width: auto;
+    height: auto;
+    border-radius: 0;
+    border: none;
+    background: transparent;
+    color: rgba(255, 255, 255, 0.6);
+    font-family: inherit;
+    font-size: 0.85rem;
+    font-weight: 600;
+    padding: 0.75rem 1.5rem;
+    cursor: pointer;
+    transition: all 0.25s ease;
+    box-shadow: none;
+    letter-spacing: 0.01em;
+    white-space: nowrap;
+    border-bottom: 3px solid transparent;
+    position: relative;
+    bottom: -2px;
+  }
+
+  .tab-btn:hover:not(:disabled) {
+    color: rgba(255, 255, 255, 0.85);
+  }
+
+  .tab-btn.active {
+    color: #fff;
+    border-bottom-color: #fff;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  /* ── Admin Body ──────────────────────────────────── */
+  .admin-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 2rem 1.5rem;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .admin-container {
+    max-width: 1200px;
+    width: 100%;
+    margin: 0 auto;
+  }
+
+  /* ── Banner Integración En Curso ─────────────────── */
+  .banner-integracion {
+    display: flex;
+    gap: 1rem;
+    align-items: flex-start;
+    padding: 1rem 1.25rem;
+    background: rgba(255, 170, 0, 0.15);
+    border: 1px solid rgba(255, 170, 0, 0.4);
+    border-left: 4px solid rgba(255, 170, 0, 0.8);
+    border-radius: 10px;
+    margin-bottom: 1.5rem;
+    animation: slideUp 0.3s ease;
+  }
+
+  .banner-integracion-icon {
+    font-size: 1.5rem;
+    flex-shrink: 0;
+    animation: pulse 1.5s ease-in-out infinite;
+  }
+
+  .banner-integracion-text {
+    flex: 1;
+  }
+
+  .banner-integracion-text strong {
+    color: #ffcc00;
+    font-size: 0.95rem;
+  }
+
+  .banner-integracion-text p {
+    color: rgba(255, 255, 255, 0.8);
+    font-size: 0.85rem;
+    line-height: 1.5;
+    margin-top: 0.25rem;
+  }
+
+  .banner-dismiss-btn {
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: rgba(255, 255, 255, 0.7);
+    padding: 0.3rem 0.75rem;
+    border-radius: 6px;
+    font-size: 0.8rem;
+    cursor: pointer;
+    margin-top: 0.5rem;
+    transition: background 0.2s ease;
+    white-space: nowrap;
+    min-width: max-content;
+  }
+
+  .banner-dismiss-btn:hover {
+    background: rgba(255, 255, 255, 0.2);
+    color: #fff;
+  }
+
+  /* ── Admin Sub-tabs ──────────────────────────────── */
+  .admin-subtabs {
+    display: inline-flex;
+    gap: 0.5rem;
+    margin-bottom: 2rem;
+    background: rgba(0, 0, 0, 0.2);
+    padding: 0.4rem;
+    border-radius: 14px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+  }
+
+  .admin-subtab-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.5rem 1.25rem;
+    border-radius: 10px;
+    border: none;
+    background: transparent;
+    color: rgba(255, 255, 255, 0.55);
+    font-family: inherit;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s ease, color 0.2s ease;
+    white-space: nowrap;
+    flex-shrink: 0;
+    min-width: max-content;
+  }
+
+  .admin-subtab-btn:hover:not(.active) {
+    color: rgba(255, 255, 255, 0.8);
+    background: rgba(255, 255, 255, 0.08);
+  }
+
+  .admin-subtab-btn.active {
+    background: rgba(255, 255, 255, 0.18);
+    color: #fff;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+  }
+
+  .seccion-placeholder {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4rem 2rem;
+    color: rgba(255, 255, 255, 0.4);
+    font-size: 1.1rem;
+    border: 2px dashed rgba(255, 255, 255, 0.15);
+    border-radius: 12px;
+  }
+
+  .admin-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1.5rem;
+    margin-bottom: 2rem;
+  }
+
+  .admin-card {
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 12px;
+    padding: 1.5rem;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+  }
+
+  .admin-card h3 {
+    color: #fff;
+    font-size: 1rem;
+    margin-bottom: 0.75rem;
+    font-weight: 600;
+  }
+
+  .admin-card p {
+    color: rgba(255, 255, 255, 0.85);
+    font-size: 0.9rem;
+    margin-bottom: 0.5rem;
+    word-break: break-all;
+  }
+
+  .admin-card code {
+    background: rgba(0, 0, 0, 0.3);
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    font-family: 'Courier New', monospace;
+    font-size: 0.8rem;
+  }
+
+  .admin-action-btn {
+    background: rgba(255, 255, 255, 0.2);
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    color: #fff;
+    padding: 0.5rem 1rem;
+    border-radius: 8px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s, border-color 0.2s;
+    font-family: inherit;
+    white-space: nowrap;
+    flex-shrink: 0;
+    min-width: max-content;
+  }
+
+  .admin-action-btn:hover {
+    background: rgba(255, 255, 255, 0.3);
+    border-color: rgba(255, 255, 255, 0.5);
+  }
+
+  .admin-card .admin-action-btn {
+    margin-top: 1rem;
+  }
+
+  /* ── Logs Table ────────────────────────────────── */
+  .logs-table-wrap {
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 12px;
+    padding: 1.5rem;
+    backdrop-filter: blur(8px);
+  }
+
+  .logs-table-wrap h3 {
+    color: #fff;
+    font-size: 1rem;
+    margin-bottom: 1rem;
+    font-weight: 600;
+  }
+
+  .logs-table {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    max-height: 400px;
+    overflow-y: auto;
+  }
+
+  .log-row {
+    display: grid;
+    grid-template-columns: 80px 1fr 60px 40px;
+    gap: 1rem;
+    padding: 0.75rem;
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 8px;
+    font-size: 0.8rem;
+    align-items: center;
+    border-left: 3px solid transparent;
+  }
+
+  .log-row.has-error {
+    border-left-color: #ff6b6b;
+  }
+
+  .log-fecha {
+    color: rgba(255, 255, 255, 0.6);
+    font-weight: 600;
+    font-family: 'Courier New', monospace;
+  }
+
+  .log-pregunta {
+    color: rgba(255, 255, 255, 0.85);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .log-ms {
+    color: #4ade80;
+    text-align: right;
+    font-weight: 600;
+  }
+
+  .log-error {
+    color: #4ade80;
+    text-align: center;
+    font-weight: 600;
+  }
+
+  .log-error.has-error {
+    color: #ff6b6b;
+  }
+
+  /* ── Contextos Table ────────────────────────────── */
+  .contextos-table-wrap {
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 12px;
+    padding: 1.5rem;
+    backdrop-filter: blur(8px);
+    margin-bottom: 2rem;
+  }
+
+  .contextos-table-wrap h3 {
+    color: #fff;
+    font-size: 1rem;
+    margin-bottom: 1rem;
+    font-weight: 600;
+  }
+
+  .contextos-table {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    max-height: 500px;
+    overflow-y: auto;
+  }
+
+  .contexto-row {
+    display: flex;
+    align-items: center;
+    padding: 0.75rem;
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 8px;
+    font-size: 0.85rem;
+    border-left: 3px solid rgba(0, 200, 255, 0.5);
+    transition: background 0.2s ease;
+  }
+
+  .contexto-row:hover {
+    background: rgba(0, 0, 0, 0.3);
+    border-left-color: rgba(0, 200, 255, 0.8);
+  }
+
+  .contexto-nombre {
+    color: rgba(255, 255, 255, 0.9);
+    font-weight: 600;
+    flex: 1;
+  }
+
+  .recargar-btn {
+    align-self: flex-start;
+    margin-top: 0.5rem;
+  }
+
+  .seccion-header {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 1rem;
+  }
+
+  .seccion-header h3 {
+    margin: 0;
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+
+  /* ── Crear Contexto Form ────────────────────────── */
+  .crear-contexto-wrap {
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 12px;
+    padding: 1.5rem;
+    backdrop-filter: blur(8px);
+    margin-bottom: 2rem;
+  }
+
+  .crear-contexto-wrap h3 {
+    color: #fff;
+    font-size: 1rem;
+    margin-bottom: 1rem;
+    font-weight: 600;
+  }
+
+  .crear-contexto-form {
+    display: flex;
+    gap: 1rem;
+    margin-bottom: 1rem;
+    flex-wrap: wrap;
+    align-items: flex-end;
+  }
+
+  .form-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    flex: 1;
+    min-width: 150px;
+  }
+
+  .form-field label {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.7);
+    text-transform: uppercase;
+    letter-spacing: 0.01em;
+  }
+
+  .contexto-input {
+    flex: 1;
+    padding: 0.75rem;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 8px;
+    background: rgba(0, 0, 0, 0.2);
+    color: #fff;
+    font-family: inherit;
+    font-size: 0.9rem;
+    transition: border-color 0.2s ease, background 0.2s ease;
+  }
+
+  .contexto-input::placeholder {
+    color: rgba(255, 255, 255, 0.5);
+  }
+
+  .contexto-input:focus {
+    outline: none;
+    border-color: rgba(0, 200, 255, 0.8);
+    background: rgba(0, 0, 0, 0.3);
+  }
+
+  .contexto-input:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .crear-contexto-btn {
+    padding: 0.75rem 1.5rem;
+    background: rgba(0, 200, 255, 0.3);
+    border: 1px solid rgba(0, 200, 255, 0.5);
+    border-radius: 8px;
+    color: #fff;
+    font-family: inherit;
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s ease, border-color 0.2s ease;
+    white-space: nowrap;
+    flex-shrink: 0;
+    min-width: max-content;
+    align-self: flex-end;
+  }
+
+  .crear-contexto-btn:hover:not(:disabled) {
+    background: rgba(0, 200, 255, 0.5);
+    border-color: rgba(0, 200, 255, 0.8);
+  }
+
+  .crear-contexto-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .mensaje-contexto {
+    font-size: 0.9rem;
+    padding: 0.75rem;
+    border-radius: 8px;
+    background: rgba(255, 0, 0, 0.2);
+    border: 1px solid rgba(255, 0, 0, 0.4);
+    color: rgba(255, 100, 100, 1);
+    margin: 0;
+  }
+
+  .mensaje-contexto.success {
+    background: rgba(0, 200, 0, 0.2);
+    border-color: rgba(0, 200, 0, 0.4);
+    color: rgba(100, 255, 100, 1);
+  }
+
+  /* ── Borrar Contexto Form ────────────────────────── */
+  .borrar-contexto-wrap {
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 12px;
+    padding: 1.5rem;
+    backdrop-filter: blur(8px);
+    margin-bottom: 2rem;
+  }
+
+  .borrar-contexto-wrap h3 {
+    color: #fff;
+    font-size: 1rem;
+    margin-bottom: 1rem;
+    font-weight: 600;
+  }
+
+  .borrar-contexto-form {
+    display: flex;
+    gap: 1rem;
+    margin-bottom: 1rem;
+    align-items: flex-end;
+  }
+
+  .contexto-select {
+    padding: 0.75rem;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 8px;
+    background: rgba(0, 0, 0, 0.2);
+    color: #fff;
+    font-family: inherit;
+    font-size: 0.9rem;
+    cursor: pointer;
+    transition: border-color 0.2s ease, background 0.2s ease;
+    width: 100%;
+  }
+
+  .contexto-select:focus {
+    outline: none;
+    border-color: rgba(200, 50, 50, 0.8);
+    background: rgba(0, 0, 0, 0.3);
+  }
+
+  .contexto-select:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .contexto-select option {
+    background: #1a1a1a;
+    color: #fff;
+  }
+
+  .borrar-contexto-btn {
+    padding: 0.75rem 1.5rem;
+    background: rgba(200, 50, 50, 0.3);
+    border: 1px solid rgba(200, 50, 50, 0.5);
+    border-radius: 8px;
+    color: #fff;
+    font-family: inherit;
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s ease, border-color 0.2s ease;
+    white-space: nowrap;
+    flex-shrink: 0;
+    min-width: max-content;
+    align-self: flex-end;
+  }
+
+  .borrar-contexto-btn:hover:not(:disabled) {
+    background: rgba(200, 50, 50, 0.5);
+    border-color: rgba(200, 50, 50, 0.8);
+  }
+
+  .borrar-contexto-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  /* ── Modal Confirmación ───────────────────────────── */
+  .modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.7);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+  }
+
+  .modal-content {
+    background: linear-gradient(160deg, #001a4d 0%, #003d99 30%, #0055cc 60%, #0077ff 100%);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 16px;
+    padding: 2rem;
+    max-width: 400px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(12px);
+    animation: slideUp 0.3s ease;
+  }
+
+  @keyframes slideUp {
+    from {
+      opacity: 0;
+      transform: translateY(20px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .modal-content h3 {
+    color: #fff;
+    font-size: 1.2rem;
+    margin-bottom: 1rem;
+    font-weight: 700;
+  }
+
+  .modal-content p {
+    color: rgba(255, 255, 255, 0.85);
+    font-size: 0.95rem;
+    line-height: 1.5;
+    margin-bottom: 0.75rem;
+  }
+
+  .modal-buttons {
+    display: flex;
+    gap: 1rem;
+    margin-top: 1.5rem;
+  }
+
+  .modal-btn {
+    flex: 1;
+    padding: 0.75rem 1rem;
+    border-radius: 8px;
+    border: none;
+    font-family: inherit;
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s ease, transform 0.1s ease;
+  }
+
+  .modal-btn:active:not(:disabled) {
+    transform: scale(0.98);
+  }
+
+  .modal-btn.cancel {
+    background: rgba(255, 255, 255, 0.2);
+    color: #fff;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+  }
+
+  .modal-btn.cancel:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.3);
+  }
+
+  .modal-btn.danger {
+    background: rgba(255, 50, 50, 0.8);
+    color: #fff;
+    border: 1px solid rgba(255, 100, 100, 0.8);
+  }
+
+  .modal-btn.danger:hover:not(:disabled) {
+    background: rgba(255, 50, 50, 1);
+  }
+
+  .modal-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  /* ── Documentos Section ──────────────────────────── */
+  .documentos-wrap {
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 12px;
+    padding: 1.5rem;
+    backdrop-filter: blur(8px);
+    margin-bottom: 2rem;
+  }
+
+  .documentos-contexto-select {
+    display: flex;
+    gap: 1rem;
+    align-items: flex-end;
+    margin-bottom: 1.5rem;
+    background: rgba(255, 255, 255, 0.08);
+    padding: 1rem;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+  }
+
+  .documentos-contexto-select label {
+    color: rgba(255, 255, 255, 0.85);
+    font-size: 0.9rem;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .documentos-contexto-select select {
+    flex: 1;
+    min-width: 200px;
+  }
+
+  .documentos-list-wrap {
+    margin-bottom: 1.5rem;
+  }
+
+  .documentos-list-wrap h4 {
+    color: #fff;
+    font-size: 0.95rem;
+    margin-bottom: 1rem;
+    font-weight: 600;
+  }
+
+  .documentos-table {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    background: rgba(0, 0, 0, 0.2);
+    padding: 1rem;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+  }
+
+  .documento-row {
+    display: flex;
+    align-items: center;
+    padding: 0.75rem 1rem;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 6px;
+    border-left: 3px solid rgba(0, 119, 255, 0.5);
+    transition: background 0.2s ease;
+  }
+
+  .documento-row:hover {
+    background: rgba(255, 255, 255, 0.08);
+  }
+
+  .documento-nombre {
+    color: rgba(255, 255, 255, 0.9);
+    font-size: 0.9rem;
+    word-break: break-word;
+  }
+
+  /* ── Integrar Documento Form ─────────────────────── */
+  .integrar-documento-wrap {
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 12px;
+    padding: 1.5rem;
+    backdrop-filter: blur(8px);
+    margin-bottom: 2rem;
+  }
+
+  .integrar-documento-wrap h3 {
+    color: #fff;
+    font-size: 1rem;
+    margin-bottom: 1rem;
+    font-weight: 600;
+  }
+
+  .integrar-documento-form {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    margin-bottom: 1rem;
+  }
+
+  .documento-input {
+    padding: 0.75rem;
+    border: 2px solid rgba(255, 255, 255, 0.2);
+    border-radius: 8px;
+    background: rgba(0, 0, 0, 0.2);
+    color: #fff;
+    font-family: inherit;
+    font-size: 0.9rem;
+    cursor: pointer;
+    transition: border-color 0.2s ease;
+    width: 100%;
+  }
+
+  .documento-input::file-selector-button {
+    background: rgba(0, 119, 255, 0.3);
+    border: 1px solid rgba(0, 119, 255, 0.5);
+    color: #fff;
+    padding: 0.5rem 1rem;
+    border-radius: 6px;
+    cursor: pointer;
+    margin-right: 1rem;
+    font-weight: 600;
+    transition: background 0.2s ease;
+  }
+
+  .documento-input::file-selector-button:hover {
+    background: rgba(0, 119, 255, 0.6);
+  }
+
+  .documento-input:focus {
+    outline: none;
+    border-color: rgba(0, 119, 255, 0.8);
+  }
+
+  .documento-input:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .integrar-documento-form small {
+    color: rgba(255, 255, 255, 0.7);
+    font-size: 0.8rem;
+  }
+
+  .integrar-documento-btn {
+    padding: 0.75rem 1.5rem;
+    background: rgba(0, 119, 255, 0.3);
+    border: 1px solid rgba(0, 119, 255, 0.5);
+    border-radius: 8px;
+    color: #fff;
+    font-family: inherit;
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s ease, border-color 0.2s ease;
+    white-space: nowrap;
+    min-width: max-content;
+    align-self: flex-start;
+  }
+
+  .integrar-documento-btn:hover:not(:disabled) {
+    background: rgba(0, 119, 255, 0.5);
+    border-color: rgba(0, 119, 255, 0.8);
+  }
+
+  .integrar-documento-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  /* ── Barra de Progreso ───────────────────────────── */
+  .progreso-wrap {
+    height: 6px;
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 99px;
+    overflow: hidden;
+    margin-top: 0.75rem;
+    position: relative;
+  }
+
+  .progreso-bar {
+    height: 100%;
+    border-radius: 99px;
+  }
+
+  .progreso-bar.indeterminate {
+    position: absolute;
+    width: 45%;
+    background: linear-gradient(90deg, transparent, #0077ff, #00c8ff, transparent);
+    animation: sweep 1.4s ease-in-out infinite;
+  }
+
+  @keyframes sweep {
+    0%   { left: -50%; }
+    100% { left: 110%; }
+  }
+
+  .progreso-bar.done {
+    width: 100%;
+    background: linear-gradient(90deg, #16a34a, #4ade80);
+    box-shadow: 0 0 8px rgba(74, 222, 128, 0.6);
+    transition: width 0.3s ease;
+  }
+
+  /* ── Borrar Documento Form ───────────────────────── */
+  .borrar-documento-wrap {
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 12px;
+    padding: 1.5rem;
+    backdrop-filter: blur(8px);
+    margin-bottom: 2rem;
+  }
+
+  .borrar-documento-wrap h3 {
+    color: #fff;
+    font-size: 1rem;
+    margin-bottom: 1rem;
+    font-weight: 600;
+  }
+
+  .borrar-documento-form {
+    display: flex;
+    gap: 1rem;
+    margin-bottom: 1rem;
+    align-items: flex-end;
+  }
+
+  .borrar-documento-btn {
+    padding: 0.75rem 1.5rem;
+    background: rgba(200, 50, 50, 0.3);
+    border: 1px solid rgba(200, 50, 50, 0.5);
+    border-radius: 8px;
+    color: #fff;
+    font-family: inherit;
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s ease, border-color 0.2s ease;
+    white-space: nowrap;
+    flex-shrink: 0;
+    min-width: max-content;
+    align-self: flex-end;
+  }
+
+  .borrar-documento-btn:hover:not(:disabled) {
+    background: rgba(200, 50, 50, 0.5);
+    border-color: rgba(200, 50, 50, 0.8);
+  }
+
+  .borrar-documento-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  /* ── Mensajes Documento ──────────────────────────── */
+  .mensaje-documento {
+    color: rgba(200, 50, 50, 0.9);
+    font-size: 0.9rem;
+    padding: 0.75rem 1rem;
+    background: rgba(200, 50, 50, 0.15);
+    border-left: 3px solid rgba(200, 50, 50, 0.8);
+    border-radius: 4px;
+    margin-top: 0.75rem;
+    animation: slideUp 0.3s ease;
+  }
+
+  .mensaje-documento.success {
+    color: rgba(74, 222, 128, 0.9);
+    background: rgba(74, 222, 128, 0.15);
+    border-left-color: rgba(74, 222, 128, 0.8);
+  }
+
+  /* ── Modelos Section ───────────────────────────── */
+  .modelos-wrap {
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 12px;
+    padding: 1.5rem;
+    backdrop-filter: blur(8px);
+    margin-bottom: 2rem;
+  }
+
+  .modelos-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+  }
+
+  .modelo-card {
+    padding: 1rem;
+    background: rgba(0, 119, 255, 0.15);
+    border: 2px solid rgba(0, 119, 255, 0.3);
+    border-radius: 8px;
+    color: rgba(255, 255, 255, 0.8);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    text-align: center;
+    font-family: inherit;
+    font-size: 0.9rem;
+    font-weight: 600;
+  }
+
+  .modelo-card:hover:not(:disabled) {
+    background: rgba(0, 119, 255, 0.25);
+    border-color: rgba(0, 119, 255, 0.6);
+  }
+
+  .modelo-card.active {
+    background: rgba(0, 119, 255, 0.4);
+    border-color: rgba(0, 119, 255, 0.8);
+    color: #fff;
+    box-shadow: 0 0 12px rgba(0, 119, 255, 0.5);
+  }
+
+  .modelo-nombre {
+    display: block;
+    word-break: break-word;
+  }
+
+  .modelo-detalle {
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 10px;
+    padding: 1.5rem;
+    margin-top: 1.5rem;
+  }
+
+  .modelo-detalle h4 {
+    color: #fff;
+    font-size: 0.95rem;
+    margin-bottom: 1rem;
+    font-weight: 600;
+  }
+
+  .modelo-propiedades {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .propiedad-item {
+    display: flex;
+    gap: 1rem;
+    padding: 0.75rem 1rem;
+    background: rgba(0, 0, 0, 0.2);
+    border-left: 3px solid rgba(0, 119, 255, 0.5);
+    border-radius: 4px;
+    align-items: flex-start;
+  }
+
+  .propiedad-key {
+    color: rgba(0, 200, 255, 0.8);
+    font-weight: 600;
+    font-size: 0.85rem;
+    min-width: fit-content;
+    text-transform: capitalize;
+  }
+
+  .propiedad-value {
+    color: rgba(255, 255, 255, 0.75);
+    font-size: 0.85rem;
+    word-break: break-word;
+    font-family: 'Monaco', 'Courier New', monospace;
   }
 
   /* ── Responsive ──────────────────────────────────── */
