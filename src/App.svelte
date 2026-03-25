@@ -768,6 +768,7 @@
         {/each}
       </div>
     </div>
+    {#if estadoSalud === 'online'}
     <div class="context-select-wrap">
       <label for="ctx-select">Contexto</label>
       {#if cargandoContextos}
@@ -782,6 +783,7 @@
         </select>
       {/if}
     </div>
+    {/if}
     <div class="model-toggle">
       {#each MODELOS as m}
         <button
@@ -792,7 +794,6 @@
         >{m}</button>
       {/each}
     </div>
-    <div class="header-logo">MIDE</div>
     <div class="tabs-toggle">
       <button
         class="tab-btn"
