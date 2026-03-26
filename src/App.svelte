@@ -1132,7 +1132,7 @@
                     class="contexto-input"
                   />
                   {#if !cargandoModelosEmbedding}
-                    <p style="font-size:0.75rem; color:#aaa; margin-top:2px;">No se detectaron modelos especificos de embedding, ingresa el nombre manual.</p>
+                    <p class="field-hint">No se detectaron modelos especificos de embedding, ingresa el nombre manual.</p>
                   {/if}
                 {/if}
               </div>
@@ -2298,7 +2298,7 @@
   .crear-contexto-form {
     display: flex;
     gap: 1rem;
-    margin-bottom: 1rem;
+    margin-bottom: 1.75rem;
     flex-wrap: wrap;
     align-items: flex-end;
   }
@@ -2309,6 +2309,18 @@
     gap: 0.5rem;
     flex: 1;
     min-width: 150px;
+    position: relative;
+  }
+
+  .field-hint {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 100%;
+    margin-top: 2px;
+    font-size: 0.75rem;
+    color: rgba(255, 255, 255, 0.65);
+    line-height: 1.2;
   }
 
   .form-field label {
