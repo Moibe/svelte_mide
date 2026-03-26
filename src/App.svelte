@@ -1,5 +1,5 @@
 <script>
-  import { tick, onMount } from 'svelte';
+  import { tick, onMount, untrack } from 'svelte';
 
   // ─── Sesión & Logs ───────────────────────────────────────────────
   const SESSION_ID = crypto.randomUUID();
@@ -77,11 +77,28 @@
 
   // Función para cambiar ambiente — recarga contextos al cambiar
   function cambiarAmbiente(nuevoAmbiente) {
+    if (ambienteSeleccionado !== nuevoAmbiente) {
+      modelosEmbedding = []; // Limpiamos caché de modelos
+      nuevoContextoEmbedding = '';
+      // Limpia mensajes/estado del panel admin para evitar residuos del ambiente anterior
+      mensajeCrearContexto = '';
+      mensajeBorrarContexto = '';
+      mensajeIntegrarDocumento = '';
+      mensajeBorrarDocumento = '';
+      errorAdminContextos = '';
+      contextoABorrar = '';
+      documentoSeleccionadoParaBorrar = '';
+      mostrarConfirmacionBorrar = false;
+      mostrarConfirmacionBorrarDocumento = false;
+    }
     ambienteSeleccionado = nuevoAmbiente;
     localStorage.setItem('mide_ambiente', nuevoAmbiente);
     console.log(`🔄 Ambiente cambiado a: ${nuevoAmbiente}`);
     console.log(`📍 API URL: ${apiUrl.real}/chatbot`);
     cargarContextos();
+    if (activeTab === 'admin') {
+      cargarContextosAdmin();
+    }
     verificarSalud();
   }
 
@@ -105,7 +122,9 @@
   // Carga contextos en admin cuando cambia el tab
   $effect(() => {
     if (activeTab === 'admin') {
-      cargarContextosAdmin();
+      untrack(() => {
+        cargarContextosAdmin();
+      });
     }
   });
 
@@ -131,10 +150,15 @@
   let adminTab = $state('contextos');
   let administracionContextos = $state([]);
   let cargandoAdminContextos = $state(false);
+  
+  // Modelos de Embedding
+  let modelosEmbedding = $state([]);
+  let cargandoModelosEmbedding = $state(false);
+
   let errorAdminContextos = $state('');
   let nuevoContextoNombre = $state('');
   let nuevoContextoEmbedding = $state('');
-  let nuevoContextoChunkSize = $state('7500');
+  let nuevoContextoChunkSize = $state('1500');
   let cargandoCrearContexto = $state(false);
   let mensajeCrearContexto = $state('');
   let contextoABorrar = $state('');
@@ -159,6 +183,8 @@
   let modeloSeleccionado = $state(null);
   let infoModeloSeleccionado = $state(null);
   let cargandoInfoModelo = $state(false);
+  // Cache por ambiente para modelos de embedding
+  let cacheModelosEmbedding = {};
   let estadoSalud = $state('checking'); // 'online', 'offline', 'checking'
   let ultimaVerificacion = $state(null);
   let timerVerificacion = null;
@@ -185,6 +211,9 @@
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       estadoSalud = data.status === 'ok' ? 'online' : 'offline';
+      if (estadoSalud === 'online') {
+        errorAdminContextos = '';
+      }
       ultimaVerificacion = new Date();
     } catch (err) {
       estadoSalud = 'offline';
@@ -279,8 +308,92 @@
     }
   }
 
+  async function cargarModelosEmbedding() {
+    cargandoModelosEmbedding = true;
+    modelosEmbedding = [];
+    try {
+      // Reuse cache for current environment if available
+      if (cacheModelosEmbedding[ambienteSeleccionado]?.length) {
+        modelosEmbedding = cacheModelosEmbedding[ambienteSeleccionado];
+        if (modelosEmbedding.length > 0 && !nuevoContextoEmbedding) {
+          nuevoContextoEmbedding = modelosEmbedding[0];
+        }
+        return;
+      }
+
+      // 1. Listar todos los modelos
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10000);
+      const res = await fetch(`${apiUrl.base}/listarModelos`, { signal: controller.signal });
+      clearTimeout(timeout);
+      
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      
+      // Parse response based on format
+      let listaModelos = [];
+      if (Array.isArray(data)) listaModelos = data;
+      else if (data.modelos && Array.isArray(data.modelos)) listaModelos = data.modelos;
+
+      // 2. Verificar cada modelo para ver si es de embedding
+      const modelosConfirmados = [];
+
+      // Validar cada modelo
+      for (const modelo of listaModelos) {
+        try {
+          const c2 = new AbortController();
+          const t2 = setTimeout(() => c2.abort(), 5000); // 5s por modelo
+          const r2 = await fetch(`${apiUrl.base}/infoModelo/${encodeURIComponent(modelo)}`, { signal: c2.signal });
+          clearTimeout(t2);
+          
+          if (r2.ok) {
+            const info = await r2.json();
+
+            // Preferir la bandera que ya entrega la API
+            const tipo = (info.tipo || '').toString().toLowerCase();
+            if (tipo === 'embedding') {
+              modelosConfirmados.push(modelo);
+              continue;
+            }
+
+            // Fallback heurístico si la API no trae tipo
+            let familiesStr = "";
+            const details = info.details || {};
+            if (Array.isArray(details.families)) familiesStr = details.families.join(" ").toLowerCase();
+            else if (typeof details.family === "string") familiesStr = details.family.toLowerCase();
+            
+            const nombre = modelo.toLowerCase();
+
+            if (nombre.includes('embed') || familiesStr.includes('bert')) {
+              modelosConfirmados.push(modelo);
+            }
+          }
+        } catch (e) {
+          console.warn(`Error al verificar modelo ${modelo} para embeddings:`, e);
+        }
+      }
+      modelosEmbedding = modelosConfirmados;
+      cacheModelosEmbedding[ambienteSeleccionado] = modelosEmbedding;
+      // Seleccionar por defecto uno si hay y no hay seleccion
+      if (modelosEmbedding.length > 0 && !nuevoContextoEmbedding) {
+        nuevoContextoEmbedding = modelosEmbedding[0];
+      }
+
+      console.log('%c🧬 Modelos Embeddings detectados:', 'color:#d0f;font-weight:bold', modelosEmbedding);
+
+    } catch (err) {
+      console.error('Error al cargar modelos de embedding:', err);
+    } finally {
+      cargandoModelosEmbedding = false;
+    }
+  }
+
   async function cargarContextosAdmin() {
     cargandoAdminContextos = true;
+    // Solo carga modelos si no están en caché
+    if (modelosEmbedding.length === 0) {
+      cargarModelosEmbedding();
+    }
     administracionContextos = [];
     errorAdminContextos = '';
     try {
@@ -296,7 +409,7 @@
         info: typeof info === 'object' ? info : {},
         timestamp: new Date().toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })
       }));
-      console.log('%c📂 Contextos Admin cargados:', 'color:#0077ff;font-weight:bold', administracionContextos);
+      console.log('%c📂 Contextos Admin cargados:', 'color:#0077ff;font-weight:bold', $state.snapshot(administracionContextos));
     } catch (err) {
       if (err.name === 'AbortError') {
         errorAdminContextos = '⏳ La API no respondió (tiempo de espera agotado). Puede estar ocupada procesando un documento. Intenta recargar en unos momentos.';
@@ -330,26 +443,39 @@
     mensajeCrearContexto = '';
 
     try {
-      const payload = {
-        nombre_contexto: nuevoContextoNombre.trim(),
-        embedding_model: nuevoContextoEmbedding.trim(),
-        chunk_size: chunkSizeNum
-      };
+      const nombre = encodeURIComponent(nuevoContextoNombre.trim());
+      const modelo = encodeURIComponent(nuevoContextoEmbedding.trim());
+      const chunk = encodeURIComponent(chunkSizeNum);
+      const url = `${apiUrl.base}/crearContexto?nombre_contexto=${nombre}&embedding_model=${modelo}&chunk_size=${chunk}`;
 
       console.groupCollapsed(`%c📤 POST /crearContexto`, 'color:#0077ff;font-weight:bold;font-size:12px');
       console.log('URL enviada :', `${apiUrl.real}/crearContexto`);
-      console.log('Payload     :', payload);
+      console.log('Query params:', { nombre_contexto: nombre, embedding_model: modelo, chunk_size: chunk });
       console.groupEnd();
 
-      const res = await fetch(`${apiUrl.base}/crearContexto`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+      const res = await fetch(url, {
+        method: 'POST'
       });
 
       if (!res.ok) {
-        const errorBody = await res.text().catch(() => '(sin detalles)');
-        throw new Error(`HTTP ${res.status}: ${errorBody}`);
+        const errorText = await res.text().catch(() => '(sin detalles)');
+        let friendlyMessage = errorText;
+        try {
+           const jsonError = JSON.parse(errorText);
+           // Handle FastAPI detail format (string or array/object)
+           if (jsonError.detail) {
+             friendlyMessage = typeof jsonError.detail === 'string' 
+               ? jsonError.detail 
+               : JSON.stringify(jsonError.detail);
+           } else {
+             friendlyMessage = jsonError.message || jsonError.error || friendlyMessage;
+           }
+        } catch (e) {}
+
+        if (res.status === 400) {
+             throw new Error(friendlyMessage); 
+        }
+        throw new Error(`HTTP ${res.status}: ${friendlyMessage}`);
       }
 
       const data = await res.json();
@@ -359,10 +485,10 @@
       console.log('Respuesta   :', data);
       console.groupEnd();
 
-      mensajeCrearContexto = `✅ Contexto "${nuevoContextoNombre}" creado exitosamente`;
+      mensajeCrearContexto = `✅ ${data.Mensaje ?? `Contexto "${nuevoContextoNombre}" creado exitosamente`}`;
       nuevoContextoNombre = '';
       nuevoContextoEmbedding = '';
-      nuevoContextoChunkSize = '7500';
+      nuevoContextoChunkSize = '1500';
 
       // Recarga la lista después de 1 segundo
       setTimeout(() => {
@@ -387,19 +513,14 @@
     mensajeBorrarContexto = '';
 
     try {
-      const payload = {
-        nombre_contexto: contextoABorrar.trim()
-      };
-
-      console.groupCollapsed(`%c📤 POST /borrarContexto`, 'color:#ff6b35;font-weight:bold;font-size:12px');
-      console.log('URL enviada :', `${apiUrl.real}/borrarContexto`);
-      console.log('Payload     :', payload);
+      const nombreContexto = contextoABorrar.trim();
+      console.groupCollapsed(`%c📤 DELETE /borrarContexto`, 'color:#ff6b35;font-weight:bold;font-size:12px');
+      console.log('URL enviada :', `${apiUrl.real}/borrarContexto?contexto=${encodeURIComponent(nombreContexto)}`);
+      console.log('Query param :', { contexto: nombreContexto });
       console.groupEnd();
 
-      const res = await fetch(`${apiUrl.base}/borrarContexto`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+      const res = await fetch(`${apiUrl.base}/borrarContexto?contexto=${encodeURIComponent(nombreContexto)}`, {
+        method: 'DELETE'
       });
 
       if (!res.ok) {
@@ -414,7 +535,7 @@
       console.log('Respuesta   :', data);
       console.groupEnd();
 
-      mensajeBorrarContexto = `✅ Contexto "${contextoABorrar}" borrado exitosamente`;
+      mensajeBorrarContexto = `✅ ${data.Mensaje ?? `Contexto "${contextoABorrar}" borrado exitosamente`}`;
       contextoABorrar = '';
       mostrarConfirmacionBorrar = false;
 
@@ -746,12 +867,12 @@
       </div>
       <div class="header-info">
         <h1 class="header-title">Asistente MIDE</h1>
-        <span class="header-status" onclick={verificarSalud} title="Click para verificar conexión" role="button" tabindex="0">
+        <span class="header-status" onclick={verificarSalud} onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && verificarSalud()} title="Click para verificar conexión" role="button" tabindex="0">
           <span class="status-dot" class:online={estadoSalud === 'online'} class:offline={estadoSalud === 'offline'} class:checking={estadoSalud === 'checking'}></span>
           {#if estadoSalud === 'online'}
-            En línea
+            En linea
           {:else if estadoSalud === 'offline'}
-            Desconectado
+            Sin conexion
           {:else}
             Verificando...
           {/if}
@@ -893,7 +1014,7 @@
         {/if}
 
         <!-- Mensaje de Error Global -->
-        {#if errorAdminContextos}
+        {#if errorAdminContextos && estadoSalud !== 'online'}
           <div style="margin-bottom: 1.5rem; padding: 1rem; background: rgba(255,170,0,0.1); border-left: 4px solid rgba(255,170,0,0.7); border-radius: 8px;">
             <p style="color: rgba(255,200,0,0.9); font-size: 0.95rem; line-height: 1.5; margin: 0;">❌ {errorAdminContextos}</p>
           </div>
@@ -901,13 +1022,6 @@
 
         <!-- Sub-tab bar -->
         <div class="admin-subtabs">
-          <button
-            class="admin-subtab-btn"
-            class:active={adminTab === 'dashboard'}
-            onclick={() => adminTab = 'dashboard'}
-          >
-            📊 Dashboard
-          </button>
           <button
             class="admin-subtab-btn"
             class:active={adminTab === 'contextos'}
@@ -932,49 +1046,6 @@
         </div>
 
         <!-- Dashboard -->
-        {#if adminTab === 'dashboard'}
-          <div class="admin-grid">
-            <div class="admin-card">
-              <h3>📋 Logs</h3>
-              <p>Total registros en sesión: <strong>{logs.length}</strong></p>
-              <button onclick={() => console.table(logs)} class="admin-action-btn">
-                Ver en consola
-              </button>
-            </div>
-            <div class="admin-card">
-              <h3>🔑 Sesión Actual</h3>
-              <p><code>{SESSION_ID}</code></p>
-              <button onclick={() => navigator.clipboard.writeText(SESSION_ID)} class="admin-action-btn">
-                Copiar UUID
-              </button>
-            </div>
-            <div class="admin-card">
-              <h3>🌐 Ambiente</h3>
-              <p>{ambienteSeleccionado}</p>
-              <p style="font-size: 0.85rem; color: rgba(255,255,255,0.6);">{apiUrl.real}</p>
-            </div>
-            <div class="admin-card">
-              <h3>🤖 Modelo Activo</h3>
-              <p>{modelo}</p>
-            </div>
-          </div>
-          {#if logs.length > 0}
-            <div class="logs-table-wrap">
-              <h3>Últimos Logs</h3>
-              <div class="logs-table">
-                {#each logs.slice(-5).reverse() as log (log.fecha + log.sesion)}
-                  <div class="log-row">
-                    <span class="log-fecha">{new Date(log.fecha).toLocaleTimeString('es-MX', {hour:'2-digit', minute:'2-digit', second:'2-digit'})}</span>
-                    <span class="log-pregunta">{log.pregunta.substring(0, 40)}...</span>
-                    <span class="log-ms">{log.ms}ms</span>
-                    <span class="log-error" class:has-error={log.error}>{log.error || '✓'}</span>
-                  </div>
-                {/each}
-              </div>
-            </div>
-          {/if}
-        {/if}
-
         <!-- Contextos -->
         {#if adminTab === 'contextos'}
           <div class="contextos-table-wrap">
@@ -1014,18 +1085,41 @@
                 />
               </div>
               <div class="form-field">
-                <label for="contexto-embedding">Modelo de Embedding</label>
-                <input
-                  id="contexto-embedding"
-                  type="text"
-                  placeholder="ej: text-embedding-ada-002"
-                  bind:value={nuevoContextoEmbedding}
-                  disabled={cargandoCrearContexto}
-                  class="contexto-input"
-                />
+                <label for="contexto-embedding">
+                  Modelo de Embedding
+                  {#if cargandoModelosEmbedding}
+                    <span style="font-size:0.75rem; color:#888; margin-left:8px;">(Cargando...)</span>
+                  {/if}
+                </label>
+                {#if modelosEmbedding.length > 0}
+                  <select
+                    id="contexto-embedding"
+                    bind:value={nuevoContextoEmbedding}
+                    disabled={cargandoCrearContexto}
+                    class="contexto-input"
+                    style="display: block; width: 100%;"
+                  >
+                    <option value="">-- Selecciona Modelo --</option>
+                    {#each modelosEmbedding as emb (emb)}
+                      <option value={emb}>{emb}</option>
+                    {/each}
+                  </select>
+                {:else}
+                  <input
+                    id="contexto-embedding"
+                    type="text"
+                    placeholder="ej: nomic-embed-text"
+                    bind:value={nuevoContextoEmbedding}
+                    disabled={cargandoCrearContexto}
+                    class="contexto-input"
+                  />
+                  {#if !cargandoModelosEmbedding}
+                    <p style="font-size:0.75rem; color:#aaa; margin-top:2px;">No se detectaron modelos especificos de embedding, ingresa el nombre manual.</p>
+                  {/if}
+                {/if}
               </div>
               <div class="form-field">
-                <label for="contexto-chunk-size">Chunk Size (tokens)</label>
+                <label for="contexto-chunk-size">Medida Embedding</label>
                 <input
                   id="contexto-chunk-size"
                   type="number"
@@ -1034,6 +1128,7 @@
                   disabled={cargandoCrearContexto}
                   class="contexto-input"
                   min="1"
+                  style="-moz-appearance: textfield;"
                 />
               </div>
               <button
@@ -1339,6 +1434,7 @@
         {/if}
 
       </div>
+      <p class="disclaimer">MIDE · Museo Interactivo de Economía</p>
     </main>
   {/if}
 </div>
@@ -1379,6 +1475,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 1.5rem;
     padding: 1rem 1.5rem;
     background: rgba(0, 0, 0, 0.25);
     backdrop-filter: blur(12px);
@@ -2023,44 +2120,6 @@
     border-radius: 12px;
   }
 
-  .admin-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    gap: 1.5rem;
-    margin-bottom: 2rem;
-  }
-
-  .admin-card {
-    background: rgba(255, 255, 255, 0.1);
-    border: 1px solid rgba(255, 255, 255, 0.15);
-    border-radius: 12px;
-    padding: 1.5rem;
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
-  }
-
-  .admin-card h3 {
-    color: #fff;
-    font-size: 1rem;
-    margin-bottom: 0.75rem;
-    font-weight: 600;
-  }
-
-  .admin-card p {
-    color: rgba(255, 255, 255, 0.85);
-    font-size: 0.9rem;
-    margin-bottom: 0.5rem;
-    word-break: break-all;
-  }
-
-  .admin-card code {
-    background: rgba(0, 0, 0, 0.3);
-    padding: 0.25rem 0.5rem;
-    border-radius: 4px;
-    font-family: 'Courier New', monospace;
-    font-size: 0.8rem;
-  }
-
   .admin-action-btn {
     background: rgba(255, 255, 255, 0.2);
     border: 1px solid rgba(255, 255, 255, 0.3);
@@ -2080,26 +2139,6 @@
   .admin-action-btn:hover {
     background: rgba(255, 255, 255, 0.3);
     border-color: rgba(255, 255, 255, 0.5);
-  }
-
-  .admin-card .admin-action-btn {
-    margin-top: 1rem;
-  }
-
-  /* ── Logs Table ────────────────────────────────── */
-  .logs-table-wrap {
-    background: rgba(255, 255, 255, 0.08);
-    border: 1px solid rgba(255, 255, 255, 0.15);
-    border-radius: 12px;
-    padding: 1.5rem;
-    backdrop-filter: blur(8px);
-  }
-
-  .logs-table-wrap h3 {
-    color: #fff;
-    font-size: 1rem;
-    margin-bottom: 1rem;
-    font-weight: 600;
   }
 
   .logs-table {
@@ -2218,6 +2257,7 @@
     margin: 0;
     flex-shrink: 0;
     white-space: nowrap;
+    color: white;
   }
 
   /* ── Crear Contexto Form ────────────────────────── */
@@ -2271,6 +2311,13 @@
     font-family: inherit;
     font-size: 0.9rem;
     transition: border-color 0.2s ease, background 0.2s ease;
+  }
+
+  /* Ocultar flechitas del input type=number */
+  .contexto-input::-webkit-outer-spin-button,
+  .contexto-input::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
   }
 
   .contexto-input::placeholder {
@@ -2521,7 +2568,7 @@
   .documentos-contexto-select {
     display: flex;
     gap: 1rem;
-    align-items: flex-end;
+    align-items: center;
     margin-bottom: 1.5rem;
     background: rgba(255, 255, 255, 0.08);
     padding: 1rem;
