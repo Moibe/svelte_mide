@@ -174,9 +174,17 @@
   let cargandoModelosEmbedding = $state(false);
 
   let errorAdminContextos = $state('');
+  const DEFAULT_EMBEDDING_MODEL = 'mxbai';
   let nuevoContextoNombre = $state('');
   let nuevoContextoEmbedding = $state('');
   let nuevoContextoChunkSize = $state('1500');
+
+  // Nombre auto-generado: mide-<primera_palabra_modelo>-<chunk>
+  const nombreContextoGenerado = $derived.by(() => {
+    const primerapalabra = (nuevoContextoEmbedding || '').split(/[-:_\s]/)[0].toLowerCase();
+    const chunk = nuevoContextoChunkSize || '1500';
+    return primerapalabra ? `mide-${primerapalabra}-${chunk}` : 'mide--1500';
+  });
   let cargandoCrearContexto = $state(false);
   let mensajeCrearContexto = $state('');
   let contextoABorrar = $state('');
@@ -203,6 +211,7 @@
   let cargandoInfoModelo = $state(false);
   // Cache por ambiente para modelos de embedding
   let cacheModelosEmbedding = {};
+  let chunkSugeridoPorModelo = {};
   let estadoSalud = $state('checking'); // 'online', 'offline', 'checking'
   let ultimaVerificacion = $state(null);
   let timerVerificacion = null;
@@ -220,6 +229,7 @@
   }
 
   async function verificarSalud() {
+    const estadoPrevio = estadoSalud;
     estadoSalud = 'checking';
     try {
       const controller = new AbortController();
@@ -231,6 +241,11 @@
       estadoSalud = data.status === 'ok' ? 'online' : 'offline';
       if (estadoSalud === 'online') {
         errorAdminContextos = '';
+        // Si la API acaba de regresar, recargar contextos
+        if (estadoPrevio === 'offline') {
+          console.log('%c🔄 API regresó online — recargando contextos', 'color:#16a34a;font-weight:bold');
+          cargarContextos();
+        }
       }
       ultimaVerificacion = new Date();
     } catch (err) {
@@ -277,6 +292,17 @@
       }
     } finally {
       cargandoModelos = false;
+    }
+  }
+
+  function seleccionarModeloDefault(lista) {
+    const match = lista.find(m => m.toLowerCase().includes(DEFAULT_EMBEDDING_MODEL.toLowerCase()));
+    return match || lista[0];
+  }
+
+  function aplicarChunkSugerido(modelo) {
+    if (modelo && chunkSugeridoPorModelo[modelo]) {
+      nuevoContextoChunkSize = chunkSugeridoPorModelo[modelo];
     }
   }
 
@@ -334,7 +360,9 @@
       if (cacheModelosEmbedding[ambienteSeleccionado]?.length) {
         modelosEmbedding = cacheModelosEmbedding[ambienteSeleccionado];
         if (modelosEmbedding.length > 0 && !nuevoContextoEmbedding) {
-          nuevoContextoEmbedding = modelosEmbedding[0];
+          const preferido = seleccionarModeloDefault(modelosEmbedding);
+          nuevoContextoEmbedding = preferido;
+          aplicarChunkSugerido(preferido);
         }
         return;
       }
@@ -368,6 +396,11 @@
             const info = await r2.json();
 
             // Preferir la bandera que ya entrega la API
+            // Guardar chunk_size_sugerido si viene en la respuesta
+            if (info.chunk_size_sugerido) {
+              chunkSugeridoPorModelo[modelo] = String(info.chunk_size_sugerido);
+            }
+
             const tipo = (info.tipo || '').toString().toLowerCase();
             if (tipo === 'embedding') {
               modelosConfirmados.push(modelo);
@@ -394,7 +427,9 @@
       cacheModelosEmbedding[ambienteSeleccionado] = modelosEmbedding;
       // Seleccionar por defecto uno si hay y no hay seleccion
       if (modelosEmbedding.length > 0 && !nuevoContextoEmbedding) {
-        nuevoContextoEmbedding = modelosEmbedding[0];
+        const preferido = seleccionarModeloDefault(modelosEmbedding);
+        nuevoContextoEmbedding = preferido;
+        aplicarChunkSugerido(preferido);
       }
 
       console.log('%c🧬 Modelos Embeddings detectados:', 'color:#d0f;font-weight:bold', modelosEmbedding);
@@ -442,12 +477,8 @@
   }
 
   async function crearContexto() {
-    if (!nuevoContextoNombre.trim()) {
-      mensajeCrearContexto = '❌ Ingresa un nombre para el contexto';
-      return;
-    }
-    if (!nuevoContextoEmbedding.trim()) {
-      mensajeCrearContexto = '❌ Ingresa el modelo de embedding';
+    if (!nombreContextoGenerado || !nuevoContextoEmbedding.trim()) {
+      mensajeCrearContexto = '❌ Selecciona un modelo de embedding';
       return;
     }
 
@@ -461,7 +492,7 @@
     mensajeCrearContexto = '';
 
     try {
-      const nombre = encodeURIComponent(nuevoContextoNombre.trim());
+      const nombre = encodeURIComponent(nombreContextoGenerado);
       const modelo = encodeURIComponent(nuevoContextoEmbedding.trim());
       const chunk = encodeURIComponent(chunkSizeNum);
       const url = `${apiUrl.base}/crearContexto?nombre_contexto=${nombre}&embedding_model=${modelo}&chunk_size=${chunk}`;
@@ -1096,10 +1127,10 @@
                 <input
                   id="contexto-nombre"
                   type="text"
-                  placeholder="ej: historia-mide"
-                  bind:value={nuevoContextoNombre}
-                  disabled={cargandoCrearContexto}
+                  value={nombreContextoGenerado}
+                  disabled
                   class="contexto-input"
+                  style="opacity: 0.65; cursor: default;"
                 />
               </div>
               <div class="form-field">
@@ -1113,6 +1144,7 @@
                   <select
                     id="contexto-embedding"
                     bind:value={nuevoContextoEmbedding}
+                    onchange={() => aplicarChunkSugerido(nuevoContextoEmbedding)}
                     disabled={cargandoCrearContexto}
                     class="contexto-input"
                     style="display: block; width: 100%;"
@@ -1151,7 +1183,7 @@
               </div>
               <button
                 onclick={crearContexto}
-                disabled={cargandoCrearContexto || !nuevoContextoNombre.trim() || !nuevoContextoEmbedding.trim()}
+                disabled={cargandoCrearContexto || !nombreContextoGenerado || !nuevoContextoEmbedding.trim()}
                 class="crear-contexto-btn"
               >
                 {cargandoCrearContexto ? '⟳ Creando...' : '✓ Crear'}
