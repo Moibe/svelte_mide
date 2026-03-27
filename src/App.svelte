@@ -766,9 +766,9 @@
     }
   }
 
-  const MAX_TURNOS = 5;
+  let maxTurnos = $state(5);
 
-  // Construye el historial en formato role/content (últimos 5 turnos)
+  // Construye el historial en formato role/content (últimos N turnos)
   function buildHistorial() {
     const historial = [];
     const convo = messages.filter((m) => m.role === 'user' || m.role === 'bot');
@@ -782,8 +782,8 @@
         i += 1;
       }
     }
-    // Cada turno = 2 entradas (user + assistant), conservar últimos 5 turnos
-    return historial.slice(-MAX_TURNOS * 2);
+    // Cada turno = 2 entradas (user + assistant), conservar últimos N turnos
+    return historial.slice(-maxTurnos * 2);
   }
 
   function formatTime(date) {
@@ -952,6 +952,17 @@
           {/each}
         </select>
       {/if}
+    </div>
+    <div class="context-select-wrap">
+      <label for="historial-select">Historial</label>
+      <select id="historial-select" bind:value={maxTurnos}>
+        <option value={0}>Sin historial</option>
+        <option value={1}>1 turno</option>
+        <option value={3}>3 turnos</option>
+        <option value={5}>5 turnos</option>
+        <option value={10}>10 turnos</option>
+        <option value={20}>20 turnos</option>
+      </select>
     </div>
     {/if}
     <div class="model-toggle">
