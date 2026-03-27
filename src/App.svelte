@@ -797,6 +797,11 @@
     }
   }
 
+  function resetChat() {
+    messages = [];
+    inputText = '';
+  }
+
   async function sendMessage() {
     const text = inputText.trim();
     if (!text || isLoading) return;
@@ -1033,6 +1038,17 @@
   {#if activeTab === 'chat'}
   <footer class="input-area">
     <div class="input-container">
+      <button
+        onclick={resetChat}
+        disabled={isLoading || messages.length === 0}
+        aria-label="Limpiar chat"
+        class="reset-btn"
+        title="Limpiar conversación"
+      >
+        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z" fill="currentColor"/>
+        </svg>
+      </button>
       <textarea
         bind:value={inputText}
         onkeydown={handleKeydown}
@@ -1861,6 +1877,38 @@
   }
 
   /* ── Input area ──────────────────────────────────── */
+  .input-container button {
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    border: none;
+    background: rgba(255, 255, 255, 0.2);
+    color: #fff;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: background 0.2s ease, opacity 0.2s;
+  }
+
+  .input-container button:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+
+  .input-container button:not(:disabled):hover {
+    background: rgba(255, 255, 255, 0.35);
+  }
+
+  .reset-btn {
+    background: rgba(255, 255, 255, 0.08) !important;
+  }
+
+  .reset-btn:not(:disabled):hover {
+    background: rgba(255, 100, 100, 0.3) !important;
+  }
+
   .input-area {
     padding: 1rem 1rem 1.25rem;
     background: rgba(0, 0, 0, 0.2);
