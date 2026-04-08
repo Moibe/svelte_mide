@@ -1062,7 +1062,7 @@
           class:active={modelo === m}
           onclick={() => (modelo = m)}
           aria-pressed={modelo === m}
-        >{m}</button>
+        >{m.replace('gpt-', '')}</button>
       {/each}
     </div>
     <div class="tabs-toggle">
@@ -1895,6 +1895,10 @@
     border-color: rgba(16, 163, 127, 0.35);
   }
 
+  .model-toggle-openai .model-toggle-label {
+    color: #fff;
+  }
+
   .model-toggle-label {
     font-size: 0.6rem;
     font-weight: 700;
@@ -1907,6 +1911,7 @@
 
   .model-btn-openai {
     color: rgba(255, 255, 255, 0.55);
+    white-space: nowrap;
   }
 
   .model-btn-openai:hover:not(:disabled) {
