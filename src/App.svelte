@@ -156,6 +156,7 @@
   ]);
 
   const MODELOS = ['mistral', 'llama3.1'];
+  const MODELOS_OPENAI = ['gpt-4o-mini', 'gpt-4o', 'gpt-3.5-turbo'];
 
   let modelo = $state('mistral');
   let contextos = $state([]);
@@ -175,6 +176,7 @@
 
   let errorAdminContextos = $state('');
   const DEFAULT_EMBEDDING_MODEL = 'mxbai';
+  const MODELOS_EMBEDDING_OPENAI = ['text-embedding-3-small', 'text-embedding-3-large'];
   let nuevoContextoNombre = $state('');
   let nuevoContextoEmbedding = $state('');
   let nuevoContextoChunkSize = $state('1500');
@@ -211,7 +213,11 @@
   let cargandoInfoModelo = $state(false);
   // Cache por ambiente para modelos de embedding
   let cacheModelosEmbedding = {};
-  let chunkSugeridoPorModelo = {};
+  let chunkSugeridoPorModelo = {
+    // Defaults estáticos para modelos de OpenAI (max tokens del modelo)
+    'text-embedding-3-small': '8191',
+    'text-embedding-3-large': '8191',
+  };
   let estadoSalud = $state('checking'); // 'online', 'offline', 'checking'
   let ultimaVerificacion = $state(null);
   let timerVerificacion = null;
@@ -229,6 +235,8 @@
   }
 
   async function verificarSalud() {
+    // No interferir con peticiones de chat activas
+    if (isLoading) return;
     const estadoPrevio = estadoSalud;
     estadoSalud = 'checking';
     try {
@@ -336,9 +344,27 @@
       clearTimeout(timeout);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-      // La API devuelve { "Contextos existentes para este chatbot": { "nombre": {...}, ... } }
-      const mapa = data['Contextos existentes para este chatbot'] ?? {};
-      contextos = Object.keys(mapa);
+      console.log('%c📂 Respuesta /listarContextos:', 'color:#c8102e;font-weight:bold', data);
+      
+      // Soportar múltiples formatos de respuesta
+      let mapa = {};
+      if (data['Contextos existentes para este chatbot']) {
+        mapa = data['Contextos existentes para este chatbot'];
+      } else if (Array.isArray(data)) {
+        // Si devuelve un array directo de nombres
+        contextos = data;
+        contextoSeleccionado = contextos[0] ?? '';
+        console.log('%c📂 Contextos cargados:', 'color:#c8102e;font-weight:bold', contextos);
+        return;
+      } else if (data.contextos && typeof data.contextos === 'object') {
+        mapa = data.contextos;
+      } else {
+        // Último recurso: usar las keys del primer objeto que encuentre
+        const firstObjKey = Object.keys(data).find(k => typeof data[k] === 'object' && data[k] !== null);
+        if (firstObjKey) mapa = data[firstObjKey];
+      }
+      
+      contextos = Array.isArray(mapa) ? mapa : Object.keys(mapa);
       contextoSeleccionado = contextos[0] ?? '';
       console.log('%c📂 Contextos cargados:', 'color:#c8102e;font-weight:bold', contextos);
     } catch (err) {
@@ -423,7 +449,12 @@
           console.warn(`Error al verificar modelo ${modelo} para embeddings:`, e);
         }
       }
-      modelosEmbedding = modelosConfirmados;
+      // Combinar modelos de Ollama con los de OpenAI (evitando duplicados)
+      const todosLosModelos = [
+        ...modelosConfirmados,
+        ...MODELOS_EMBEDDING_OPENAI.filter(m => !modelosConfirmados.includes(m))
+      ];
+      modelosEmbedding = todosLosModelos;
       cacheModelosEmbedding[ambienteSeleccionado] = modelosEmbedding;
       // Seleccionar por defecto uno si hay y no hay seleccion
       if (modelosEmbedding.length > 0 && !nuevoContextoEmbedding) {
@@ -436,6 +467,15 @@
 
     } catch (err) {
       console.error('Error al cargar modelos de embedding:', err);
+      // Aunque falle la API, mostrar siempre los modelos de OpenAI
+      if (modelosEmbedding.length === 0) {
+        modelosEmbedding = [...MODELOS_EMBEDDING_OPENAI];
+        if (!nuevoContextoEmbedding) {
+          const preferido = seleccionarModeloDefault(modelosEmbedding);
+          nuevoContextoEmbedding = preferido;
+          aplicarChunkSugerido(preferido);
+        }
+      }
     } finally {
       cargandoModelosEmbedding = false;
     }
@@ -797,8 +837,15 @@
     }
   }
 
+  const MENSAJE_INICIAL = {
+    id: 1,
+    role: 'bot',
+    text: '¡Hola! Soy el asistente del MIDE. ¿En qué puedo ayudarte hoy?',
+    time: formatTime(new Date()),
+  };
+
   function resetChat() {
-    messages = [];
+    messages = [{ ...MENSAJE_INICIAL, time: formatTime(new Date()) }];
     inputText = '';
   }
 
@@ -854,10 +901,15 @@
       console.log('Status      :', response.status);
       console.log('Tiempo      :', `${elapsed}ms`);
       console.log('JSON        :', data);
+      console.log('Keys        :', Object.keys(data));
       console.groupEnd();
 
-      const botText =
-        data.Mensaje ?? data.respuesta ?? data.answer ?? data.response ?? data.message ?? JSON.stringify(data);
+      // Extraer texto: recorre claves conocidas; si el valor es objeto, lo serializa
+      const candidato =
+        data.Mensaje ?? data.respuesta ?? data.answer ?? data.response ?? data.message ?? data.content ?? data;
+      const botText = typeof candidato === 'string'
+        ? candidato
+        : JSON.stringify(candidato, null, 2);
 
       registrarLog({
         pregunta: text,
@@ -968,6 +1020,13 @@
         <option value={10}>10 turnos</option>
         <option value={20}>20 turnos</option>
       </select>
+      <button
+        class="clear-chat-btn"
+        onclick={resetChat}
+        disabled={messages.length <= 1}
+        title="Limpiar conversación"
+        aria-label="Limpiar conversación"
+      >&#x1F5D1;</button>
     </div>
     {/if}
     <div class="model-toggle">
@@ -980,11 +1039,22 @@
         >{m}</button>
       {/each}
     </div>
+    <div class="model-toggle model-toggle-openai">
+      <span class="model-toggle-label">OpenAI</span>
+      {#each MODELOS_OPENAI as m}
+        <button
+          class="model-btn model-btn-openai"
+          class:active={modelo === m}
+          onclick={() => (modelo = m)}
+          aria-pressed={modelo === m}
+        >{m}</button>
+      {/each}
+    </div>
     <div class="tabs-toggle">
       <button
         class="tab-btn"
         class:active={activeTab === 'chat'}
-        onclick={() => { activeTab = 'chat'; verificarSalud(); }}
+        onclick={() => { activeTab = 'chat'; cargarContextos(); verificarSalud(); }}
         aria-pressed={activeTab === 'chat'}
       >💬 Chatbot</button>
       <button
@@ -1052,8 +1122,6 @@
       <textarea
         bind:value={inputText}
         onkeydown={handleKeydown}
-        onfocus={verificarSalud}
-        oninput={verificarSaludDesdeInput}
         placeholder="Escribe tu mensaje..."
         rows="1"
         disabled={isLoading}
@@ -1738,6 +1806,39 @@
     background: #f0f0f0;
   }
 
+  .model-toggle-openai {
+    border-color: rgba(16, 163, 127, 0.35);
+  }
+
+  .model-toggle-label {
+    font-size: 0.6rem;
+    font-weight: 700;
+    color: rgba(16, 163, 127, 0.8);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 0 4px;
+    align-self: center;
+  }
+
+  .model-btn-openai {
+    color: rgba(255, 255, 255, 0.55);
+  }
+
+  .model-btn-openai:hover:not(:disabled) {
+    background: rgba(16, 163, 127, 0.2);
+    color: #fff;
+  }
+
+  .model-btn-openai.active {
+    background: rgb(16, 163, 127);
+    color: #fff;
+    box-shadow: 0 1px 6px rgba(16, 163, 127, 0.4);
+  }
+
+  .model-btn-openai.active:hover:not(:disabled) {
+    background: rgb(13, 140, 108);
+  }
+
   /* ── Chat body ───────────────────────────────────── */
   .chat-body {
     flex: 1;
@@ -2061,6 +2162,29 @@
     font-size: 0.75rem;
     color: rgba(255, 255, 255, 0.35);
     font-style: italic;
+  }
+
+  .clear-chat-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 0.9rem;
+    line-height: 1;
+    padding: 2px 4px;
+    border-radius: 6px;
+    opacity: 0.5;
+    transition: opacity 0.2s, background 0.2s;
+    color: #fff;
+  }
+
+  .clear-chat-btn:not(:disabled):hover {
+    opacity: 1;
+    background: rgba(255, 80, 80, 0.25);
+  }
+
+  .clear-chat-btn:disabled {
+    opacity: 0.2;
+    cursor: not-allowed;
   }
 
   /* ── Tabs toggle ────────────────────────────────── */
