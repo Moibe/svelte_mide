@@ -1,3 +1,4 @@
+import { resolve } from 'path';
 import { defineConfig, loadEnv } from 'vite';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 
@@ -6,6 +7,14 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [svelte()],
+    build: {
+      rollupOptions: {
+        input: {
+          main: resolve(__dirname, 'index.html'),
+          embed: resolve(__dirname, 'embed/index.html'),
+        },
+      },
+    },
     server: {
       proxy: {
         '/api-desarrollo': {

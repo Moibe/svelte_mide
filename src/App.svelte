@@ -167,6 +167,21 @@
   let chatContainer = $state(null);
   let activeTab = $state('chat');
   let adminTab = $state('contextos');
+
+  // Lightbot config (defaults para embed)
+  let lightbotAmbiente = $state('staging');
+  let lightbotContexto = $state('');
+  let lightbotModelo = $state('mistral');
+  let lightbotHistorial = $state(3);
+
+  // Auto-seleccionar contexto con 'mxbai' para lightbot
+  $effect(() => {
+    if (!lightbotContexto && contextos.length > 0) {
+      const mxbai = contextos.find(c => c.toLowerCase().includes('mxbai'));
+      if (mxbai) lightbotContexto = mxbai;
+    }
+  });
+
   let administracionContextos = $state([]);
   let cargandoAdminContextos = $state(false);
   
@@ -1187,6 +1202,13 @@
           >
             🤖 Modelos
           </button>
+          <button
+            class="admin-subtab-btn"
+            class:active={adminTab === 'lightbot'}
+            onclick={() => adminTab = 'lightbot'}
+          >
+            💬 Lightbot
+          </button>
         </div>
 
         <!-- Dashboard -->
@@ -1544,6 +1566,69 @@
                 {/if}
               </div>
             {/if}
+          </div>
+        {/if}
+
+        <!-- Lightbot -->
+        {#if adminTab === 'lightbot'}
+          <div class="lightbot-wrap">
+            <div class="seccion-header">
+              <h3>💬 Configuración Lightbot</h3>
+            </div>
+            <p class="lightbot-desc">Define los valores por defecto del widget embebible. Estos se usarán cuando no se pasen parámetros por URL.</p>
+
+            <div class="lightbot-form">
+              <div class="lightbot-field">
+                <label for="lb-ambiente">Ambiente</label>
+                <select id="lb-ambiente" bind:value={lightbotAmbiente}>
+                  {#each Object.keys(AMBIENTES) as amb}
+                    <option value={amb}>{amb}</option>
+                  {/each}
+                </select>
+              </div>
+
+              <div class="lightbot-field">
+                <label for="lb-contexto">Contexto</label>
+                <select id="lb-contexto" bind:value={lightbotContexto}>
+                  <option value="">— Seleccionar —</option>
+                  {#each contextos as ctx}
+                    <option value={ctx}>{ctx}</option>
+                  {/each}
+                </select>
+              </div>
+
+              <div class="lightbot-field">
+                <label for="lb-modelo">Modelo LLM</label>
+                <select id="lb-modelo" bind:value={lightbotModelo}>
+                  <optgroup label="Ollama">
+                    {#each MODELOS as m}
+                      <option value={m}>{m}</option>
+                    {/each}
+                  </optgroup>
+                  <optgroup label="OpenAI">
+                    {#each MODELOS_OPENAI as m}
+                      <option value={m}>{m}</option>
+                    {/each}
+                  </optgroup>
+                </select>
+              </div>
+
+              <div class="lightbot-field">
+                <label for="lb-historial">Historial (turnos)</label>
+                <select id="lb-historial" bind:value={lightbotHistorial}>
+                  {#each [0, 1, 2, 3, 5, 10, 15, 20] as n}
+                    <option value={n}>{n === 0 ? 'Sin historial' : `${n} turnos`}</option>
+                  {/each}
+                </select>
+              </div>
+            </div>
+
+            <div class="lightbot-preview">
+              <h4>📋 URL del widget</h4>
+              <code class="lightbot-url">{AMBIENTES[lightbotAmbiente]?.url ?? ''}/embed/?ambiente={lightbotAmbiente}&contexto={lightbotContexto}&modelo={lightbotModelo}&historial={lightbotHistorial}</code>
+              <h4 style="margin-top: 1rem;">📌 Código para embeber</h4>
+              <code class="lightbot-url">&lt;iframe src="{AMBIENTES[lightbotAmbiente]?.url ?? ''}/embed/?ambiente={lightbotAmbiente}&amp;contexto={lightbotContexto}&amp;modelo={lightbotModelo}&amp;historial={lightbotHistorial}" width="400" height="600" style="border:none;border-radius:12px" &gt;&lt;/iframe&gt;</code>
+            </div>
           </div>
         {/if}
 
@@ -3163,6 +3248,94 @@
     font-size: 0.85rem;
     word-break: break-word;
     font-family: 'Monaco', 'Courier New', monospace;
+  }
+
+  /* ── Lightbot Section ──────────────────────────── */
+  .lightbot-wrap {
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 12px;
+    padding: 1.5rem;
+    backdrop-filter: blur(8px);
+    margin-bottom: 2rem;
+  }
+
+  .lightbot-desc {
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 0.85rem;
+    margin-bottom: 1.5rem;
+    line-height: 1.5;
+  }
+
+  .lightbot-form {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 1.25rem;
+    margin-bottom: 1.5rem;
+  }
+
+  .lightbot-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+
+  .lightbot-field label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.7);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .lightbot-field select {
+    padding: 0.6rem 0.75rem;
+    border-radius: 8px;
+    border: 1.5px solid rgba(255, 255, 255, 0.2);
+    background: rgba(0, 0, 0, 0.25);
+    color: #fff;
+    font-family: inherit;
+    font-size: 0.875rem;
+    outline: none;
+    cursor: pointer;
+    transition: border-color 0.2s;
+  }
+
+  .lightbot-field select:focus {
+    border-color: rgba(0, 150, 255, 0.6);
+  }
+
+  .lightbot-field select option,
+  .lightbot-field select optgroup {
+    background: #1a1a2e;
+    color: #fff;
+  }
+
+  .lightbot-preview {
+    background: rgba(0, 0, 0, 0.2);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    padding: 1rem 1.25rem;
+  }
+
+  .lightbot-preview h4 {
+    font-size: 0.8rem;
+    color: rgba(255, 255, 255, 0.7);
+    margin-bottom: 0.5rem;
+  }
+
+  .lightbot-url {
+    display: block;
+    background: rgba(0, 0, 0, 0.3);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 6px;
+    padding: 0.6rem 0.75rem;
+    font-size: 0.78rem;
+    color: rgba(100, 200, 255, 0.9);
+    word-break: break-all;
+    font-family: 'Monaco', 'Courier New', monospace;
+    line-height: 1.5;
+    user-select: all;
   }
 
   /* ── Responsive ──────────────────────────────────── */
