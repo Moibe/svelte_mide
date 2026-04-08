@@ -1630,7 +1630,7 @@
 
             <div class="lightbot-preview">
               <h4>📋 URL del widget</h4>
-              <code class="lightbot-url">{AMBIENTES[lightbotAmbiente]?.frontend ?? window.location.origin}/embed/?ambiente={lightbotAmbiente}&contexto={lightbotContexto}&modelo={lightbotModelo}&historial={lightbotHistorial}</code>
+              <code class="lightbot-url">{AMBIENTES[lightbotAmbiente]?.frontend ?? window.location.origin}/embed/index.html?ambiente={lightbotAmbiente}&contexto={lightbotContexto}&modelo={lightbotModelo}&historial={lightbotHistorial}</code>
             </div>
           </div>
         {/if}
