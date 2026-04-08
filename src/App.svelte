@@ -1625,9 +1625,9 @@
 
             <div class="lightbot-preview">
               <h4>📋 URL del widget</h4>
-              <code class="lightbot-url">{AMBIENTES[lightbotAmbiente]?.url ?? ''}/embed/?ambiente={lightbotAmbiente}&contexto={lightbotContexto}&modelo={lightbotModelo}&historial={lightbotHistorial}</code>
+              <code class="lightbot-url">{window.location.origin}/embed/?ambiente={lightbotAmbiente}&contexto={lightbotContexto}&modelo={lightbotModelo}&historial={lightbotHistorial}</code>
               <h4 style="margin-top: 1rem;">📌 Código para embeber</h4>
-              <code class="lightbot-url">&lt;iframe src="{AMBIENTES[lightbotAmbiente]?.url ?? ''}/embed/?ambiente={lightbotAmbiente}&amp;contexto={lightbotContexto}&amp;modelo={lightbotModelo}&amp;historial={lightbotHistorial}" width="400" height="600" style="border:none;border-radius:12px" &gt;&lt;/iframe&gt;</code>
+              <code class="lightbot-url">&lt;iframe src="{window.location.origin}/embed/?ambiente={lightbotAmbiente}&amp;contexto={lightbotContexto}&amp;modelo={lightbotModelo}&amp;historial={lightbotHistorial}" width="400" height="600" style="border:none;border-radius:12px" &gt;&lt;/iframe&gt;</code>
             </div>
           </div>
         {/if}
