@@ -65,9 +65,9 @@
   }
 
   const AMBIENTES = {
-    desarrollo: { url: 'http://127.0.0.1:8000', proxy: '/api-desarrollo' },
-    staging: { url: 'http://172.10.30.15:8080', proxy: '/api-staging' },
-    producción: { url: 'http://172.10.30.16:8080', proxy: '/api-produccion' },
+    desarrollo: { url: 'http://127.0.0.1:8000', proxy: '/api-desarrollo', frontend: 'http://localhost:5173' },
+    staging: { url: 'http://172.10.30.15:8080', proxy: '/api-staging', frontend: 'http://172.10.30.15:4173' },
+    producción: { url: 'http://172.10.30.16:8080', proxy: '/api-produccion', frontend: 'http://172.10.30.16:4173' },
   };
 
   // Determina el ambiente por defecto según build mode
@@ -173,6 +173,11 @@
   let lightbotContexto = $state('');
   let lightbotModelo = $state('mistral');
   let lightbotHistorial = $state(3);
+
+  // Sincronizar lightbotAmbiente con el ambiente seleccionado en el navbar
+  $effect(() => {
+    lightbotAmbiente = ambienteSeleccionado;
+  });
 
   // Auto-seleccionar contexto con 'mxbai' para lightbot
   $effect(() => {
@@ -1625,9 +1630,7 @@
 
             <div class="lightbot-preview">
               <h4>📋 URL del widget</h4>
-              <code class="lightbot-url">{window.location.origin}/embed/?ambiente={lightbotAmbiente}&contexto={lightbotContexto}&modelo={lightbotModelo}&historial={lightbotHistorial}</code>
-              <h4 style="margin-top: 1rem;">📌 Código para embeber</h4>
-              <code class="lightbot-url">&lt;iframe src="{window.location.origin}/embed/?ambiente={lightbotAmbiente}&amp;contexto={lightbotContexto}&amp;modelo={lightbotModelo}&amp;historial={lightbotHistorial}" width="400" height="600" style="border:none;border-radius:12px" &gt;&lt;/iframe&gt;</code>
+              <code class="lightbot-url">{AMBIENTES[lightbotAmbiente]?.frontend ?? window.location.origin}/embed/?ambiente={lightbotAmbiente}&contexto={lightbotContexto}&modelo={lightbotModelo}&historial={lightbotHistorial}</code>
             </div>
           </div>
         {/if}
