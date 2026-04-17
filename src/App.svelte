@@ -1210,7 +1210,7 @@
           <button
             class="admin-subtab-btn"
             class:active={adminTab === 'lightbot'}
-            onclick={() => adminTab = 'lightbot'}
+            onclick={() => { adminTab = 'lightbot'; cargarContextos(); }}
           >
             💬 Lightbot
           </button>
