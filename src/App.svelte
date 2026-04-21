@@ -269,16 +269,32 @@
       estadoSalud = data.status === 'ok' ? 'online' : 'offline';
       if (estadoSalud === 'online') {
         errorAdminContextos = '';
-        // Si la API acaba de regresar, recargar contextos
         if (estadoPrevio === 'offline') {
           console.log('%c🔄 API regresó online — recargando contextos', 'color:#16a34a;font-weight:bold');
           cargarContextos();
+        } else if (estadoPrevio === 'checking' && import.meta.env.PROD) {
+          console.log(`%c✅ API online [${ambienteSeleccionado}] → ${apiUrl.real}`, 'color:#16a34a;font-weight:bold');
         }
+      } else {
+        console.warn(`%c⚠️ API respondió pero status != ok [${ambienteSeleccionado}] → ${apiUrl.real}`, 'color:#d97706;font-weight:bold', data);
       }
       ultimaVerificacion = new Date();
     } catch (err) {
+      const wasOnline = estadoPrevio === 'online';
       estadoSalud = 'offline';
       ultimaVerificacion = new Date();
+      const label = err.name === 'AbortError' ? 'Timeout (>5s)' : err.message;
+      if (wasOnline) {
+        console.error(
+          `%c🔴 API caída [${ambienteSeleccionado}] → ${apiUrl.real}\n   Motivo: ${label}\n   Hora: ${new Date().toLocaleTimeString()}`,
+          'color:#dc2626;font-weight:bold'
+        );
+      } else if (estadoPrevio === 'checking') {
+        console.warn(
+          `%c⚠️ API no disponible [${ambienteSeleccionado}] → ${apiUrl.real}\n   Motivo: ${label}`,
+          'color:#d97706;font-weight:bold'
+        );
+      }
     }
     reprogramarTimer();
   }
