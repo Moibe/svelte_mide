@@ -103,7 +103,7 @@
       mensajeBorrarContexto = '';
       mensajeIntegrarDocumento = '';
       mensajeBorrarDocumento = '';
-      errorAdminContextos = '';
+      errorVectorizacionContextos = '';
       contextoABorrar = '';
       documentoSeleccionadoParaBorrar = '';
       mostrarConfirmacionBorrar = false;
@@ -114,8 +114,8 @@
     console.log(`🔄 Ambiente cambiado a: ${nuevoAmbiente}`);
     console.log(`📍 API URL: ${apiUrl.real}/chatbot`);
     cargarContextos();
-    if (activeTab === 'admin') {
-      cargarContextosAdmin();
+    if (activeTab === 'vectorizacion') {
+      cargarContextosVectorizacion();
     }
     verificarSalud();
   }
@@ -137,11 +137,11 @@
     cargarContextos();
   });
 
-  // Carga contextos en admin cuando cambia el tab
+  // Carga contextos en vectorización cuando cambia el tab
   $effect(() => {
-    if (activeTab === 'admin') {
+    if (activeTab === 'vectorizacion') {
       untrack(() => {
-        cargarContextosAdmin();
+        cargarContextosVectorizacion();
       });
     }
   });
@@ -165,47 +165,231 @@
   let inputText = $state('');
   let isLoading = $state(false);
   let chatContainer = $state(null);
-  let activeTab = $state('chat');
-  let adminTab = $state('contextos');
+  let activeTab = $state('vectorizacion');
+  let vectorizacionTab = $state('contextos');
+  let adminTab = $state('modelos');
+  let defaultContextGuardado = $state(
+    typeof localStorage !== 'undefined' ? (localStorage.getItem('mide_default_context') || '') : ''
+  );
+  let defaultContext = $state(defaultContextGuardado);
+  let defaultContextGuardadoFlash = $state(false);
+  let defaultContextFlashTimer = null;
 
-  // Lightbot config (defaults para embed)
+  function guardarDefaultContext() {
+    localStorage.setItem('mide_default_context', defaultContext);
+    defaultContextGuardado = defaultContext;
+    defaultContextGuardadoFlash = true;
+    if (defaultContextFlashTimer) clearTimeout(defaultContextFlashTimer);
+    defaultContextFlashTimer = setTimeout(() => { defaultContextGuardadoFlash = false; }, 2500);
+  }
+
+  // Lightbot config (defaults para embed) — persistidos en backend por ambiente
+  const LIGHTBOT_DEFAULTS_FALLBACK = { contexto: '', modelo: 'mistral', historial: 3 };
   let lightbotAmbiente = $state('staging');
-  let lightbotContexto = $state('');
-  let lightbotModelo = $state('mistral');
-  let lightbotHistorial = $state(3);
+  let lightbotContexto = $state(LIGHTBOT_DEFAULTS_FALLBACK.contexto);
+  let lightbotModelo = $state(LIGHTBOT_DEFAULTS_FALLBACK.modelo);
+  let lightbotHistorial = $state(LIGHTBOT_DEFAULTS_FALLBACK.historial);
+  let lightbotGuardado = $state({ ...LIGHTBOT_DEFAULTS_FALLBACK });
+  let lightbotGuardadoFlash = $state(false);
+  let lightbotFlashTimer = null;
+  let lightbotCargando = $state(false);
+  let lightbotErrorCargar = $state('');
+  let lightbotErrorGuardar = $state('');
+
+  async function cargarLightbotDefaults() {
+    lightbotCargando = true;
+    lightbotErrorCargar = '';
+    try {
+      const res = await fetch(`${apiUrl.base}/configLightbot`);
+      if (res.status === 404) {
+        lightbotGuardado = { ...LIGHTBOT_DEFAULTS_FALLBACK };
+        lightbotContexto = LIGHTBOT_DEFAULTS_FALLBACK.contexto;
+        lightbotModelo = LIGHTBOT_DEFAULTS_FALLBACK.modelo;
+        lightbotHistorial = LIGHTBOT_DEFAULTS_FALLBACK.historial;
+        return;
+      }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const cfg = {
+        contexto: data.contexto ?? '',
+        modelo: data.modelo ?? LIGHTBOT_DEFAULTS_FALLBACK.modelo,
+        historial: data.historial ?? LIGHTBOT_DEFAULTS_FALLBACK.historial,
+      };
+      lightbotGuardado = cfg;
+      lightbotContexto = cfg.contexto;
+      lightbotModelo = cfg.modelo;
+      lightbotHistorial = cfg.historial;
+    } catch (err) {
+      lightbotErrorCargar = `No se pudo cargar la config: ${err.message}`;
+    } finally {
+      lightbotCargando = false;
+    }
+  }
+
+  async function guardarLightbotDefaults() {
+    lightbotErrorGuardar = '';
+    const snap = { contexto: lightbotContexto, modelo: lightbotModelo, historial: lightbotHistorial };
+    try {
+      const res = await fetch(`${apiUrl.base}/configLightbot`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(snap),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      lightbotGuardado = snap;
+      lightbotGuardadoFlash = true;
+      if (lightbotFlashTimer) clearTimeout(lightbotFlashTimer);
+      lightbotFlashTimer = setTimeout(() => { lightbotGuardadoFlash = false; }, 2500);
+    } catch (err) {
+      lightbotErrorGuardar = `No se pudo guardar: ${err.message}`;
+    }
+  }
+
+  function lightbotIgualAlGuardado() {
+    return lightbotContexto === lightbotGuardado.contexto
+        && lightbotModelo === lightbotGuardado.modelo
+        && lightbotHistorial === lightbotGuardado.historial;
+  }
+
+  // ContextLight config (defaults para embed) — persistidos en backend por ambiente
+  const CONTEXTLIGHT_DEFAULTS_FALLBACK = { contexto: '' };
+  let contextlightAmbiente = $state('staging');
+  let contextlightContexto = $state(CONTEXTLIGHT_DEFAULTS_FALLBACK.contexto);
+  let contextlightGuardado = $state({ ...CONTEXTLIGHT_DEFAULTS_FALLBACK });
+  let contextlightGuardadoFlash = $state(false);
+  let contextlightFlashTimer = null;
+  let contextlightCargando = $state(false);
+  let contextlightErrorCargar = $state('');
+  let contextlightErrorGuardar = $state('');
+
+  async function cargarContextlightDefaults() {
+    contextlightCargando = true;
+    contextlightErrorCargar = '';
+    try {
+      const res = await fetch(`${apiUrl.base}/configContextlight`);
+      if (res.status === 404) {
+        contextlightGuardado = { ...CONTEXTLIGHT_DEFAULTS_FALLBACK };
+        contextlightContexto = CONTEXTLIGHT_DEFAULTS_FALLBACK.contexto;
+        return;
+      }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const cfg = { contexto: data.contexto ?? '' };
+      contextlightGuardado = cfg;
+      contextlightContexto = cfg.contexto;
+    } catch (err) {
+      contextlightErrorCargar = `No se pudo cargar la config: ${err.message}`;
+    } finally {
+      contextlightCargando = false;
+    }
+  }
+
+  async function guardarContextlightDefaults() {
+    contextlightErrorGuardar = '';
+    const snap = { contexto: contextlightContexto };
+    try {
+      const res = await fetch(`${apiUrl.base}/configContextlight`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(snap),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      contextlightGuardado = snap;
+      contextlightGuardadoFlash = true;
+      if (contextlightFlashTimer) clearTimeout(contextlightFlashTimer);
+      contextlightFlashTimer = setTimeout(() => { contextlightGuardadoFlash = false; }, 2500);
+    } catch (err) {
+      contextlightErrorGuardar = `No se pudo guardar: ${err.message}`;
+    }
+  }
+
+  function contextlightIgualAlGuardado() {
+    return contextlightContexto === contextlightGuardado.contexto;
+  }
 
   // Sincronizar lightbotAmbiente con el ambiente seleccionado en el navbar
   $effect(() => {
     lightbotAmbiente = ambienteSeleccionado;
   });
 
-  // Auto-seleccionar contexto con 'mxbai' para lightbot
+  // Sincronizar contextlightAmbiente con el ambiente seleccionado en el navbar
   $effect(() => {
-    if (!lightbotContexto && contextos.length > 0) {
-      const mxbai = contextos.find(c => c.toLowerCase().includes('mxbai'));
-      if (mxbai) lightbotContexto = mxbai;
+    contextlightAmbiente = ambienteSeleccionado;
+  });
+
+  // Cargar config del ambiente activo (al montar y cuando el ambiente cambia)
+  $effect(() => {
+    if (ambienteSeleccionado) {
+      cargarLightbotDefaults();
+      cargarContextlightDefaults();
     }
   });
 
-  let administracionContextos = $state([]);
-  let cargandoAdminContextos = $state(false);
+  let vectorizacionContextos = $state([]);
+  let cargandoVectorizacionContextos = $state(false);
   
   // Modelos de Embedding
   let modelosEmbedding = $state([]);
   let cargandoModelosEmbedding = $state(false);
 
-  let errorAdminContextos = $state('');
+  let errorVectorizacionContextos = $state('');
   const DEFAULT_EMBEDDING_MODEL = 'mxbai';
   const MODELOS_EMBEDDING_OPENAI = ['text-embedding-3-small', 'text-embedding-3-large'];
+
+  // Mapeo manual de alias para modelos de embedding cuyo "primer fragmento"
+  // colisionaría con otro (p. ej. snowflake-arctic-embed vs snowflake-arctic-embed2,
+  // o text-embedding-3-small vs text-embedding-3-large).
+  // Clave: nombre completo del modelo. Valor: alias corto a usar en el nombre del contexto.
+  // Si un modelo no aparece aquí, se usa la regla por defecto (primera palabra antes de -/_/:/espacio).
+  const MODELO_ALIAS_DEFAULT = {
+    'text-embedding-3-small': 'openai3small',
+    'text-embedding-3-large': 'openai3large',
+    'snowflake-arctic-embed': 'snowflake',
+    'snowflake-arctic-embed2': 'snowflake2',
+    'snowflake-arctic-embed:latest': 'snowflake',
+    'snowflake-arctic-embed2:latest': 'snowflake2',
+  };
+
+  const ALIAS_STORAGE_KEY = 'mide.modeloAlias';
+
+  function cargarAliasGuardados() {
+    try {
+      const raw = localStorage.getItem(ALIAS_STORAGE_KEY);
+      if (!raw) return { ...MODELO_ALIAS_DEFAULT };
+      const parsed = JSON.parse(raw);
+      return { ...MODELO_ALIAS_DEFAULT, ...parsed };
+    } catch {
+      return { ...MODELO_ALIAS_DEFAULT };
+    }
+  }
+
+  let MODELO_ALIAS = $state(cargarAliasGuardados());
+
+  function guardarAlias() {
+    try {
+      localStorage.setItem(ALIAS_STORAGE_KEY, JSON.stringify(MODELO_ALIAS));
+    } catch {}
+  }
+
+  // Devuelve el alias corto para un modelo dado.
+  function aliasModeloEmbedding(modelo) {
+    if (!modelo) return '';
+    const limpio = modelo.trim();
+    const manual = MODELO_ALIAS[limpio];
+    if (manual && manual.trim()) return manual.trim();
+    // Fallback: primera palabra antes de -/_/:/espacio
+    return limpio.split(/[-:_\s]/)[0].toLowerCase();
+  }
+
   let nuevoContextoNombre = $state('');
   let nuevoContextoEmbedding = $state('');
   let nuevoContextoChunkSize = $state('1500');
 
-  // Nombre auto-generado: mide-<primera_palabra_modelo>-<chunk>
+  // Nombre auto-generado: mide-<alias_modelo>-<chunk>
   const nombreContextoGenerado = $derived.by(() => {
-    const primerapalabra = (nuevoContextoEmbedding || '').split(/[-:_\s]/)[0].toLowerCase();
+    const alias = aliasModeloEmbedding(nuevoContextoEmbedding);
     const chunk = nuevoContextoChunkSize || '1500';
-    return primerapalabra ? `mide-${primerapalabra}-${chunk}` : 'mide--1500';
+    return alias ? `mide-${alias}-${chunk}` : 'mide--1500';
   });
   let cargandoCrearContexto = $state(false);
   let mensajeCrearContexto = $state('');
@@ -213,10 +397,12 @@
   let mostrarConfirmacionBorrar = $state(false);
   let cargandoBorrarContexto = $state(false);
   let mensajeBorrarContexto = $state('');
-  let administracionDocumentos = $state([]);
-  let cargandoAdminDocumentos = $state(false);
+  let vectorizacionDocumentos = $state([]);
+  let cargandoVectorizacionDocumentos = $state(false);
   let documentoSeleccionadoParaBorrar = $state('');
   let contextoSeleccionadoParaDocumentos = $state('');
+  let vinoDeEditarContexto = $state(false);
+  let crearContextoAbierto = $state(false);
   let archivoParaIntegrar = $state(null);
   let cargandoIntegrarDocumento = $state(false);
   let progresoIntegrar = $state(0);
@@ -268,7 +454,7 @@
       const data = await res.json();
       estadoSalud = data.status === 'ok' ? 'online' : 'offline';
       if (estadoSalud === 'online') {
-        errorAdminContextos = '';
+        errorVectorizacionContextos = '';
         if (estadoPrevio === 'offline') {
           console.log('%c🔄 API regresó online — recargando contextos', 'color:#16a34a;font-weight:bold');
           cargarContextos();
@@ -517,14 +703,14 @@
     }
   }
 
-  async function cargarContextosAdmin() {
-    cargandoAdminContextos = true;
+  async function cargarContextosVectorizacion() {
+    cargandoVectorizacionContextos = true;
     // Solo carga modelos si no están en caché
     if (modelosEmbedding.length === 0) {
       cargarModelosEmbedding();
     }
-    administracionContextos = [];
-    errorAdminContextos = '';
+    vectorizacionContextos = [];
+    errorVectorizacionContextos = '';
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 10000);
@@ -533,22 +719,22 @@
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       const mapa = data['Contextos existentes para este chatbot'] ?? {};
-      administracionContextos = Object.entries(mapa).map(([nombre, info]) => ({
+      vectorizacionContextos = Object.entries(mapa).map(([nombre, info]) => ({
         nombre,
         info: typeof info === 'object' ? info : {},
         timestamp: new Date().toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })
       }));
-      console.log('%c📂 Contextos Admin cargados:', 'color:#0077ff;font-weight:bold', $state.snapshot(administracionContextos));
+      console.log('%c📂 Contextos Admin cargados:', 'color:#0077ff;font-weight:bold', $state.snapshot(vectorizacionContextos));
     } catch (err) {
       if (err.name === 'AbortError') {
-        errorAdminContextos = '⏳ La API no respondió (tiempo de espera agotado). Puede estar ocupada procesando un documento. Intenta recargar en unos momentos.';
+        errorVectorizacionContextos = '⏳ La API no respondió (tiempo de espera agotado). Puede estar ocupada procesando un documento. Intenta recargar en unos momentos.';
         console.warn('%c⏳ Timeout al cargar contextos admin — la API puede estar ocupada', 'color:orange;font-weight:bold');
       } else {
-        errorAdminContextos = `API ${ambienteSeleccionado.charAt(0).toUpperCase() + ambienteSeleccionado.slice(1)} offline`;
+        errorVectorizacionContextos = `API ${ambienteSeleccionado.charAt(0).toUpperCase() + ambienteSeleccionado.slice(1)} offline`;
         console.error('%c❌ Error al cargar contextos admin', 'color:red;font-weight:bold', err);
       }
     } finally {
-      cargandoAdminContextos = false;
+      cargandoVectorizacionContextos = false;
     }
   }
 
@@ -617,7 +803,7 @@
 
       // Recarga la lista después de 1 segundo
       setTimeout(() => {
-        cargarContextosAdmin();
+        cargarContextosVectorizacion();
       }, 1000);
 
     } catch (err) {
@@ -666,7 +852,7 @@
 
       // Recarga la lista después de 1 segundo
       setTimeout(() => {
-        cargarContextosAdmin();
+        cargarContextosVectorizacion();
       }, 1000);
 
     } catch (err) {
@@ -677,26 +863,26 @@
     }
   }
 
-  async function cargarDocumentosAdmin(contexto) {
+  async function cargarDocumentosVectorizacion(contexto) {
     if (!contexto.trim()) {
       mensajeIntegrarDocumento = '❌ Selecciona un contexto primero';
       return;
     }
 
-    cargandoAdminDocumentos = true;
-    administracionDocumentos = [];
+    cargandoVectorizacionDocumentos = true;
+    vectorizacionDocumentos = [];
 
     try {
       const res = await fetch(`${apiUrl.base}/listarDocumentos?contexto=${encodeURIComponent(contexto)}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       // La API devuelve { contexto, documentos: [...], conteo }
-      administracionDocumentos = Array.isArray(data.documentos) ? data.documentos : [];
-      console.log('%c📄 Documentos cargados:', 'color:#0077ff;font-weight:bold', administracionDocumentos);
+      vectorizacionDocumentos = Array.isArray(data.documentos) ? data.documentos : [];
+      console.log('%c📄 Documentos cargados:', 'color:#0077ff;font-weight:bold', vectorizacionDocumentos);
     } catch (err) {
       console.error('%c❌ Error al cargar documentos', 'color:red;font-weight:bold', err);
     } finally {
-      cargandoAdminDocumentos = false;
+      cargandoVectorizacionDocumentos = false;
     }
   }
 
@@ -774,7 +960,7 @@
 
       // Recarga la lista después de 1 segundo
       setTimeout(() => {
-        cargarDocumentosAdmin(contextoSeleccionadoParaDocumentos);
+        cargarDocumentosVectorizacion(contextoSeleccionadoParaDocumentos);
       }, 1000);
 
     } catch (err) {
@@ -831,7 +1017,7 @@
 
       // Recarga la lista después de 1 segundo
       setTimeout(() => {
-        cargarDocumentosAdmin(contextoSeleccionadoParaDocumentos);
+        cargarDocumentosVectorizacion(contextoSeleccionadoParaDocumentos);
       }, 1000);
 
     } catch (err) {
@@ -924,7 +1110,7 @@
 
       if (!response.ok) {
         const errorBody = await response.text().catch(() => '(sin body)');
-        console.error(`%c❌ HTTP ${response.status}`, 'color:red;font-weight:bold');
+        console.error(`%c❌ HTTP ${response.status}`, 'color:#red;font-weight:bold');
         console.error('Response body:', errorBody);
         throw new Error(`HTTP ${response.status}: ${errorBody}`);
       }
@@ -998,7 +1184,7 @@
   }
 </script>
 
-<div class="app" class:admin={activeTab === 'admin'}>
+<div class="app" class:vectorizacion={activeTab === 'vectorizacion'} class:admin={activeTab === 'admin'}>
   <!-- Header -->
   <header class="header">
     <div class="header-left">
@@ -1031,7 +1217,33 @@
         {/each}
       </div>
     </div>
-    {#if estadoSalud === 'online'}
+
+    <div class="tabs-toggle">
+      <button
+        class="tab-btn"
+        class:active={activeTab === 'vectorizacion'}
+        onclick={() => { activeTab = 'vectorizacion'; verificarSalud(); }}
+        aria-pressed={activeTab === 'vectorizacion'}
+      >🛠️ Construcción</button>
+      <button
+        class="tab-btn"
+        class:active={activeTab === 'chat'}
+        onclick={() => { activeTab = 'chat'; cargarContextos(); verificarSalud(); }}
+        aria-pressed={activeTab === 'chat'}
+      >💬 Chatbot</button>
+      <button
+        class="tab-btn admin-gear-btn"
+        class:active={activeTab === 'admin'}
+        onclick={() => { activeTab = 'admin'; cargarModelos(); cargarModelosEmbedding(); }}
+        aria-pressed={activeTab === 'admin'}
+        title="Administración"
+      >⚙️</button>
+    </div>
+  </header>
+
+  <!-- Sub-nav de chatbot -->
+  {#if activeTab === 'chat'}
+  <nav class="chat-subnav">
     <div class="context-select-wrap">
       <label for="ctx-select">Contexto</label>
       {#if cargandoContextos}
@@ -1064,43 +1276,23 @@
         aria-label="Limpiar conversación"
       >&#x1F5D1;</button>
     </div>
-    {/if}
-    <div class="model-toggle">
-      {#each MODELOS as m}
-        <button
-          class="model-btn"
-          class:active={modelo === m}
-          onclick={() => (modelo = m)}
-          aria-pressed={modelo === m}
-        >{m}</button>
-      {/each}
+    <div class="context-select-wrap model-select-wrap">
+      <label for="modelo-select">Modelo</label>
+      <select id="modelo-select" bind:value={modelo}>
+        <optgroup label="Local">
+          {#each MODELOS as m}
+            <option value={m}>{m}</option>
+          {/each}
+        </optgroup>
+        <optgroup label="OpenAI">
+          {#each MODELOS_OPENAI as m}
+            <option value={m}>{m.replace('gpt-', '')}</option>
+          {/each}
+        </optgroup>
+      </select>
     </div>
-    <div class="model-toggle model-toggle-openai">
-      <span class="model-toggle-label">OpenAI</span>
-      {#each MODELOS_OPENAI as m}
-        <button
-          class="model-btn model-btn-openai"
-          class:active={modelo === m}
-          onclick={() => (modelo = m)}
-          aria-pressed={modelo === m}
-        >{m.replace('gpt-', '')}</button>
-      {/each}
-    </div>
-    <div class="tabs-toggle">
-      <button
-        class="tab-btn"
-        class:active={activeTab === 'chat'}
-        onclick={() => { activeTab = 'chat'; cargarContextos(); verificarSalud(); }}
-        aria-pressed={activeTab === 'chat'}
-      >💬 Chatbot</button>
-      <button
-        class="tab-btn"
-        class:active={activeTab === 'admin'}
-        onclick={() => { activeTab = 'admin'; verificarSalud(); }}
-        aria-pressed={activeTab === 'admin'}
-      >⚙️ Administración</button>
-    </div>
-  </header>
+  </nav>
+  {/if}
 
   <!-- Chat body -->
   {#if activeTab === 'chat'}
@@ -1136,8 +1328,8 @@
           </div>
         </div>
       {/if}
-    </div>
-  </main>
+      </div>
+    </main>
   {/if}
 
   <!-- Input area -->
@@ -1176,10 +1368,10 @@
   </footer>
   {/if}
 
-  <!-- Admin section -->
-  {#if activeTab === 'admin'}
-    <main class="admin-body">
-      <div class="admin-container">
+  <!-- Vectorización section -->
+  {#if activeTab === 'vectorizacion'}
+    <main class="vectorizacion-body">
+      <div class="vectorizacion-container">
 
         <!-- Banner de integración en curso -->
         {#if integracionEnCurso && !cargandoIntegrarDocumento}
@@ -1194,71 +1386,70 @@
         {/if}
 
         <!-- Mensaje de Error Global -->
-        {#if errorAdminContextos && estadoSalud !== 'online'}
-          <div style="margin-bottom: 1.5rem; padding: 1rem; background: rgba(255,170,0,0.1); border-left: 4px solid rgba(255,170,0,0.7); border-radius: 8px;">
-            <p style="color: rgba(255,200,0,0.9); font-size: 0.95rem; line-height: 1.5; margin: 0;">❌ {errorAdminContextos}</p>
+        {#if errorVectorizacionContextos && estadoSalud !== 'online'}
+          <div style="margin-bottom: 1.5rem; padding: 1rem; background: rgba(200,40,40,0.9); border-radius: 8px;">
+            <p style="color: #fff; font-size: 0.95rem; line-height: 1.5; margin: 0; font-weight: 500;">❌ {errorVectorizacionContextos}</p>
           </div>
         {/if}
 
         <!-- Sub-tab bar -->
-        <div class="admin-subtabs">
+        <div class="vectorizacion-subtabs">
           <button
-            class="admin-subtab-btn"
-            class:active={adminTab === 'contextos'}
-            onclick={() => adminTab = 'contextos'}
+            class="vectorizacion-subtab-btn"
+            class:active={vectorizacionTab === 'contextos'}
+            onclick={() => { vectorizacionTab = 'contextos'; vinoDeEditarContexto = false; }}
           >
             📂 Contextos
           </button>
+          {#if vinoDeEditarContexto}
+            <span class="subtab-arrow-indicator" aria-hidden="true">»</span>
+          {/if}
           <button
-            class="admin-subtab-btn"
-            class:active={adminTab === 'documentos'}
-            onclick={() => adminTab = 'documentos'}
+            class="vectorizacion-subtab-btn"
+            class:active={vectorizacionTab === 'documentos'}
+            disabled
+            title="Accede desde el ✏️ de un contexto"
           >
             📄 Documentos
           </button>
           <button
-            class="admin-subtab-btn"
-            class:active={adminTab === 'modelos'}
-            onclick={() => { adminTab = 'modelos'; cargarModelos(); }}
+            class="vectorizacion-subtab-btn"
+            class:active={vectorizacionTab === 'lightbot'}
+            onclick={() => { vectorizacionTab = 'lightbot'; cargarContextos(); }}
           >
-            🤖 Modelos
+            💬 LightbotEmbedder
           </button>
           <button
-            class="admin-subtab-btn"
-            class:active={adminTab === 'lightbot'}
-            onclick={() => { adminTab = 'lightbot'; cargarContextos(); }}
+            class="vectorizacion-subtab-btn"
+            class:active={vectorizacionTab === 'lightbotpanel'}
+            onclick={() => { vectorizacionTab = 'lightbotpanel'; }}
           >
-            💬 Lightbot
+            🤖 LightBot
+          </button>
+          <button
+            class="vectorizacion-subtab-btn"
+            class:active={vectorizacionTab === 'contextlightembedder'}
+            onclick={() => { vectorizacionTab = 'contextlightembedder'; cargarContextos(); }}
+          >
+            📦 ContextLightEmbedder
+          </button>
+          <button
+            class="vectorizacion-subtab-btn"
+            class:active={vectorizacionTab === 'contextlight'}
+            onclick={() => { vectorizacionTab = 'contextlight'; }}
+          >
+            🪶 ContextLight
           </button>
         </div>
 
         <!-- Dashboard -->
         <!-- Contextos -->
-        {#if adminTab === 'contextos'}
-          <div class="contextos-table-wrap">
-            <div class="seccion-header">
-              <h3>📂 Contextos Disponibles</h3>
-              <button onclick={cargarContextosAdmin} class="admin-action-btn" disabled={cargandoAdminContextos}>
-                🔄 Recargar
-              </button>
-            </div>
-            {#if cargandoAdminContextos}
-              <p style="color: rgba(255,255,255,0.6); font-size: 0.9rem; padding: 1rem 0;">⟳ Cargando contextos...</p>
-            {:else if administracionContextos.length === 0}
-              <p style="color: rgba(255,255,255,0.6); font-size: 0.9rem; padding: 1rem 0;">No hay contextos disponibles</p>
-            {:else}
-              <div class="contextos-table">
-                {#each administracionContextos as contexto (contexto.nombre)}
-                  <div class="contexto-row">
-                    <span class="contexto-nombre">{contexto.nombre}</span>
-                  </div>
-                {/each}
-              </div>
-            {/if}
-          </div>
-
-          <div class="crear-contexto-wrap">
-            <h3>➕ Crear Nuevo Contexto</h3>
+        {#if vectorizacionTab === 'contextos'}
+          <div class="crear-contexto-wrap" class:abierto={crearContextoAbierto}>
+            <button class="crear-contexto-toggle" onclick={() => crearContextoAbierto = !crearContextoAbierto}>
+              <h3>➕ Crear Nuevo Contexto</h3>
+            </button>
+            {#if crearContextoAbierto}
             <div class="crear-contexto-form">
               <div class="form-field">
                 <label for="contexto-nombre">Nombre del Contexto</label>
@@ -1332,48 +1523,65 @@
                 {mensajeCrearContexto}
               </p>
             {/if}
+            {/if}
           </div>
 
-          <div class="borrar-contexto-wrap">
-            <h3>🗑️ Borrar Contexto</h3>
-            <div class="borrar-contexto-form">
-              <div class="form-field" style="flex: 1;">
-                <label for="contexto-a-borrar">Selecciona contexto</label>
-                <select
-                  id="contexto-a-borrar"
-                  bind:value={contextoABorrar}
-                  disabled={cargandoBorrarContexto || administracionContextos.length === 0}
-                  class="contexto-select"
-                >
-                  <option value="">-- Selecciona un contexto --</option>
-                  {#each administracionContextos as contexto (contexto.nombre)}
-                    <option value={contexto.nombre}>{contexto.nombre}</option>
-                  {/each}
-                </select>
-              </div>
-              <button
-                onclick={() => mostrarConfirmacionBorrar = true}
-                disabled={cargandoBorrarContexto || !contextoABorrar.trim()}
-                class="borrar-contexto-btn"
-              >
-                🗑️ Borrar
+          {#if mensajeBorrarContexto}
+            <p class="mensaje-contexto" class:success={mensajeBorrarContexto.includes('✅')} style="margin-top: 0.5rem;">
+              {mensajeBorrarContexto}
+            </p>
+          {/if}
+
+          <div class="contextos-table-wrap">
+            <div class="seccion-header">
+              <h3>📂 Contextos Existentes</h3>
+              <button onclick={cargarContextosVectorizacion} class="vectorizacion-action-btn contextos-recargar-btn" disabled={cargandoVectorizacionContextos} aria-label="Recargar contextos" title="Recargar contextos">
+                ↻
               </button>
             </div>
-            {#if mensajeBorrarContexto}
-              <p class="mensaje-contexto" class:success={mensajeBorrarContexto.includes('✅')}>
-                {mensajeBorrarContexto}
-              </p>
+            {#if cargandoVectorizacionContextos}
+              <p style="color: rgba(255,255,255,0.6); font-size: 0.9rem; padding: 1rem 0;">⟳ Cargando contextos...</p>
+            {:else if vectorizacionContextos.length === 0}
+              <p style="color: rgba(255,255,255,0.6); font-size: 0.9rem; padding: 1rem 0;">No hay contextos disponibles</p>
+            {:else}
+              <div class="contextos-table">
+                {#each vectorizacionContextos as contexto (contexto.nombre)}
+                  <div class="contexto-row">
+                    <span class="contexto-nombre">{contexto.nombre}</span>
+                    <button
+                      class="contexto-editar-btn"
+                      title="Editar contexto (ir a Documentos)"
+                      onclick={() => {
+                        contextoSeleccionadoParaDocumentos = contexto.nombre;
+                        vinoDeEditarContexto = true;
+                        vectorizacionTab = 'documentos';
+                        cargarDocumentosVectorizacion(contexto.nombre);
+                      }}
+                    >
+                      ✏️
+                    </button>
+                    <button
+                      class="contexto-borrar-btn"
+                      title="Borrar contexto"
+                      disabled={cargandoBorrarContexto}
+                      onclick={() => { contextoABorrar = contexto.nombre; mostrarConfirmacionBorrar = true; }}
+                    >
+                      🗑️
+                    </button>
+                  </div>
+                {/each}
+              </div>
             {/if}
           </div>
         {/if}
 
         <!-- Documentos -->
-        {#if adminTab === 'documentos'}
+        {#if vectorizacionTab === 'documentos'}
           <div class="documentos-wrap">
             <div class="seccion-header">
-              <h3>📄 Documentos por Contexto</h3>
-              <button onclick={() => cargarDocumentosAdmin(contextoSeleccionadoParaDocumentos)} class="admin-action-btn" disabled={cargandoAdminDocumentos}>
-                🔄 Recargar
+              <h3>� {contextoSeleccionadoParaDocumentos || 'Documentos'}</h3>
+              <button onclick={() => cargarDocumentosVectorizacion(contextoSeleccionadoParaDocumentos)} class="vectorizacion-action-btn contextos-recargar-btn" disabled={cargandoVectorizacionDocumentos} title="Recargar documentos" aria-label="Recargar documentos">
+                ↻
               </button>
             </div>
 
@@ -1383,11 +1591,11 @@
               <select
                 id="doc-contexto"
                 bind:value={contextoSeleccionadoParaDocumentos}
-                onchange={() => cargarDocumentosAdmin(contextoSeleccionadoParaDocumentos)}
+                onchange={() => cargarDocumentosVectorizacion(contextoSeleccionadoParaDocumentos)}
                 class="contexto-select"
               >
                 <option value="">-- Selecciona un contexto --</option>
-                {#each administracionContextos as contexto (contexto.nombre)}
+                {#each vectorizacionContextos as contexto (contexto.nombre)}
                   <option value={contexto.nombre}>{contexto.nombre}</option>
                 {/each}
               </select>
@@ -1397,20 +1605,33 @@
             {#if contextoSeleccionadoParaDocumentos}
               <div class="documentos-list-wrap">
                 <h4>Documentos del contexto: <strong>{contextoSeleccionadoParaDocumentos}</strong></h4>
-                {#if cargandoAdminDocumentos}
+                {#if cargandoVectorizacionDocumentos}
                   <p style="color: rgba(255,255,255,0.6); font-size: 0.9rem; padding: 1rem 0;">⟳ Cargando documentos...</p>
-                {:else if administracionDocumentos.length === 0}
+                {:else if vectorizacionDocumentos.length === 0}
                   <p style="color: rgba(255,255,255,0.6); font-size: 0.9rem; padding: 1rem 0;">No hay documentos en este contexto</p>
                 {:else}
                   <div class="documentos-table">
-                    {#each administracionDocumentos as doc (doc)}
+                    {#each vectorizacionDocumentos as doc (doc)}
                       <div class="documento-row">
                         <span class="documento-nombre">📋 {doc}</span>
+                        <button
+                          class="documento-borrar-btn"
+                          title="Borrar documento"
+                          disabled={cargandoBorrarDocumento}
+                          onclick={() => { documentoSeleccionadoParaBorrar = doc; mostrarConfirmacionBorrarDocumento = true; }}
+                        >
+                          🗑️
+                        </button>
                       </div>
                     {/each}
                   </div>
                 {/if}
               </div>
+              {#if mensajeBorrarDocumento}
+                <p class="mensaje-documento" class:success={mensajeBorrarDocumento.includes('✅')} style="margin-top: 0.5rem;">
+                  {mensajeBorrarDocumento}
+                </p>
+              {/if}
             {/if}
           </div>
 
@@ -1427,7 +1648,7 @@
                   class="contexto-select"
                 >
                   <option value="">-- Selecciona un contexto --</option>
-                  {#each administracionContextos as contexto (contexto.nombre)}
+                  {#each vectorizacionContextos as contexto (contexto.nombre)}
                     <option value={contexto.nombre}>{contexto.nombre}</option>
                   {/each}
                 </select>
@@ -1474,86 +1695,53 @@
               </p>
             {/if}
           </div>
+        {/if}
 
-          <!-- Borrar Documento -->
-          <div class="borrar-documento-wrap">
-            <h3>🗑️ Borrar Documento</h3>
-            <div class="borrar-documento-form">
-              <div class="form-field" style="flex: 1;">
-                <label for="doc-a-borrar">Selecciona documento</label>
-                <select
-                  id="doc-a-borrar"
-                  bind:value={documentoSeleccionadoParaBorrar}
-                  disabled={cargandoBorrarDocumento || administracionDocumentos.length === 0}
-                  class="contexto-select"
-                >
-                  <option value="">-- Selecciona un documento --</option>
-                  {#each administracionDocumentos as doc (doc)}
-                    <option value={doc}>{doc}</option>
-                  {/each}
-                </select>
-              </div>
-              <button
-                onclick={() => mostrarConfirmacionBorrarDocumento = true}
-                disabled={cargandoBorrarDocumento || !documentoSeleccionadoParaBorrar.trim()}
-                class="borrar-documento-btn"
-              >
-                🗑️ Borrar
-              </button>
-            </div>
-            {#if mensajeBorrarDocumento}
-              <p class="mensaje-documento" class:success={mensajeBorrarDocumento.includes('✅')}>
-                {mensajeBorrarDocumento}
+        <!-- Confirmación Modal para Borrar Documento (compartido entre Documentos y ContextLight) -->
+        {#if mostrarConfirmacionBorrarDocumento}
+          <div class="modal-overlay">
+            <div class="modal-content">
+              <h3>⚠️ Confirmar Borrado de Documento</h3>
+              <p>
+                ¿Estás seguro de que deseas borrar el documento <strong>"{documentoSeleccionadoParaBorrar}"</strong> del contexto <strong>"{contextoSeleccionadoParaDocumentos}"</strong>?
               </p>
-            {/if}
-          </div>
-
-          <!-- Confirmación Modal para Borrar Documento -->
-          {#if mostrarConfirmacionBorrarDocumento}
-            <div class="modal-overlay">
-              <div class="modal-content">
-                <h3>⚠️ Confirmar Borrado de Documento</h3>
-                <p>
-                  ¿Estás seguro de que deseas borrar el documento <strong>"{documentoSeleccionadoParaBorrar}"</strong> del contexto <strong>"{contextoSeleccionadoParaDocumentos}"</strong>?
-                </p>
-                <p style="font-size: 0.85rem; color: rgba(255,255,255,0.6);">
-                  Esta acción es irreversible.
-                </p>
-                <div class="modal-buttons">
-                  <button
-                    onclick={() => mostrarConfirmacionBorrarDocumento = false}
-                    disabled={cargandoBorrarDocumento}
-                    class="modal-btn cancel"
-                  >
-                    Cancelar
-                  </button>
-                  <button
-                    onclick={borrarDocumentoConfirmado}
-                    disabled={cargandoBorrarDocumento}
-                    class="modal-btn danger"
-                  >
-                    {cargandoBorrarDocumento ? '⟳ Borrando...' : 'Sí, borrar'}
-                  </button>
-                </div>
+              <p style="font-size: 0.85rem; color: rgba(255,255,255,0.6);">
+                Esta acción es irreversible.
+              </p>
+              <div class="modal-buttons">
+                <button
+                  onclick={() => mostrarConfirmacionBorrarDocumento = false}
+                  disabled={cargandoBorrarDocumento}
+                  class="modal-btn cancel"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onclick={borrarDocumentoConfirmado}
+                  disabled={cargandoBorrarDocumento}
+                  class="modal-btn danger"
+                >
+                  {cargandoBorrarDocumento ? '⟳ Borrando...' : 'Sí, borrar'}
+                </button>
               </div>
             </div>
-          {/if}
+          </div>
         {/if}
 
         <!-- Modelos -->
-        {#if adminTab === 'modelos'}
+        {#if vectorizacionTab === 'modelos'}
           <div class="modelos-wrap">
             <div class="seccion-header">
               <h3>🤖 Modelos Disponibles</h3>
-              <button onclick={cargarModelos} class="admin-action-btn" disabled={cargandoModelos}>
-                🔄 Recargar
+              <button onclick={cargarModelos} class="vectorizacion-action-btn" disabled={cargandoModelos}>
+                ↻ Recargar
               </button>
             </div>
 
             {#if cargandoModelos}
               <p style="color: rgba(255,255,255,0.6); font-size: 0.9rem; padding: 1rem 0;">⟳ Cargando modelos...</p>
             {:else if errorModelos}
-              <p style="color: rgba(255,200,0,0.9); font-size: 0.9rem; padding: 1rem; background: rgba(255,170,0,0.1); border-left: 3px solid rgba(255,170,0,0.7); border-radius: 4px; line-height: 1.5;">{errorModelos}</p>
+              <p style="color: #fff; font-size: 0.9rem; padding: 1rem; background: rgba(200,40,40,0.9); border-radius: 4px; line-height: 1.5; font-weight: 500;">{errorModelos}</p>
             {:else if modelosDisponibles.length === 0}
               <p style="color: rgba(255,255,255,0.6); font-size: 0.9rem; padding: 1rem 0;">No hay modelos disponibles</p>
             {:else}
@@ -1591,7 +1779,7 @@
         {/if}
 
         <!-- Lightbot -->
-        {#if adminTab === 'lightbot'}
+        {#if vectorizacionTab === 'lightbot'}
           <div class="lightbot-wrap">
             <div class="seccion-header">
               <h3>💬 Configuración Lightbot</h3>
@@ -1599,15 +1787,6 @@
             <p class="lightbot-desc">Define los valores por defecto del widget embebible. Estos se usarán cuando no se pasen parámetros por URL.</p>
 
             <div class="lightbot-form">
-              <div class="lightbot-field">
-                <label for="lb-ambiente">Ambiente</label>
-                <select id="lb-ambiente" bind:value={lightbotAmbiente}>
-                  {#each Object.keys(AMBIENTES) as amb}
-                    <option value={amb}>{amb}</option>
-                  {/each}
-                </select>
-              </div>
-
               <div class="lightbot-field">
                 <label for="lb-contexto">Contexto</label>
                 <select id="lb-contexto" bind:value={lightbotContexto}>
@@ -1646,8 +1825,178 @@
 
             <div class="lightbot-preview">
               <h4>📋 URL del widget</h4>
-              <code class="lightbot-url">{AMBIENTES[lightbotAmbiente]?.frontend ?? window.location.origin}/embed/index.html?ambiente={lightbotAmbiente}&contexto={lightbotContexto}&modelo={lightbotModelo}&historial={lightbotHistorial}</code>
+              <code class="lightbot-url">{AMBIENTES[lightbotAmbiente]?.frontend ?? window.location.origin}/embed/index.html?ambiente={lightbotAmbiente}</code>
             </div>
+
+            <!-- Default actual + guardar -->
+            <div style="display:flex; align-items:center; gap:0.6rem; padding:0.75rem 1rem; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; margin-top:1rem; flex-wrap:wrap;">
+              <span style="color:rgba(255,255,255,0.6); font-size:0.85rem;">Default actual ({lightbotAmbiente}):</span>
+              {#if lightbotCargando}
+                <span style="color:rgba(255,255,255,0.6); font-size:0.9rem;">⟳ Cargando...</span>
+              {:else if lightbotGuardado.contexto}
+                <span style="color:#fff; font-weight:600; font-size:0.9rem;">⭐ {lightbotGuardado.contexto} · {lightbotGuardado.modelo} · {lightbotGuardado.historial === 0 ? 'sin historial' : `${lightbotGuardado.historial} turnos`}</span>
+              {:else}
+                <span style="color:rgba(255,255,255,0.5); font-style:italic; font-size:0.9rem;">— Sin definir —</span>
+              {/if}
+            </div>
+
+            {#if lightbotErrorCargar}
+              <p style="color: #fff; font-size: 0.85rem; padding: 0.6rem 0.9rem; background: rgba(200,40,40,0.9); border-radius: 6px; margin-top: 0.6rem; font-weight: 500;">❌ {lightbotErrorCargar}</p>
+            {/if}
+
+            <div style="display:flex; align-items:center; gap:0.75rem; margin-top:0.75rem; flex-wrap:wrap;">
+              <button
+                class="vectorizacion-action-btn"
+                onclick={guardarLightbotDefaults}
+                disabled={!lightbotContexto || lightbotIgualAlGuardado() || lightbotCargando}
+                style="background:#198754; border-color:#198754;"
+              >
+                {#if lightbotIgualAlGuardado() && lightbotGuardado.contexto}
+                  ✓ Ya son los defaults
+                {:else}
+                  ⭐ Guardar como defaults
+                {/if}
+              </button>
+
+              {#if lightbotGuardadoFlash}
+                <span style="color:#4ade80; font-weight:600; font-size:0.9rem;">✓ Guardado</span>
+              {/if}
+            </div>
+
+            {#if lightbotErrorGuardar}
+              <p style="color: #fff; font-size: 0.85rem; padding: 0.6rem 0.9rem; background: rgba(200,40,40,0.9); border-radius: 6px; margin-top: 0.6rem; font-weight: 500;">❌ {lightbotErrorGuardar}</p>
+            {/if}
+          </div>
+        {/if}
+
+        <!-- LightBot -->
+        {#if vectorizacionTab === 'lightbotpanel'}
+          <div class="lightbot-wrap">
+            <div class="seccion-header">
+              <h3>🤖 LightBot</h3>
+            </div>
+            <p class="lightbot-desc">Visualizador del widget configurado en LightbotEmbedder.</p>
+
+            {#if !lightbotContexto}
+              <p style="color: rgba(255,255,255,0.7); padding: 1rem; background: rgba(255,255,255,0.05); border-radius: 8px;">
+                Selecciona un contexto en <strong>💬 LightbotEmbedder</strong> para ver el widget.
+              </p>
+            {:else}
+              {@const lightbotEmbedUrl = `${AMBIENTES[lightbotAmbiente]?.frontend ?? window.location.origin}/embed/index.html?ambiente=${encodeURIComponent(lightbotAmbiente)}`}
+              <div style="display:flex; align-items:center; gap:0.6rem; padding:0.6rem 1rem; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; margin-bottom:1rem; flex-wrap:wrap; font-size:0.85rem; color:rgba(255,255,255,0.75);">
+                <span><strong>Ambiente:</strong> {lightbotAmbiente}</span>
+                <span>·</span>
+                <span><strong>Contexto:</strong> {lightbotContexto}</span>
+                <span>·</span>
+                <span><strong>Modelo:</strong> {lightbotModelo}</span>
+                <span>·</span>
+                <span><strong>Historial:</strong> {lightbotHistorial}</span>
+              </div>
+              <div style="width:100%; max-width:420px; height:70vh; min-height:520px; border:1px solid rgba(255,255,255,0.12); border-radius:12px; overflow:hidden; background:#fff; margin: 0 auto;">
+                <iframe
+                  src={lightbotEmbedUrl}
+                  title="LightBot preview"
+                  style="width:100%; height:100%; border:0; display:block;"
+                ></iframe>
+              </div>
+            {/if}
+          </div>
+        {/if}
+
+
+        <!-- ContextLightEmbedder -->
+        {#if vectorizacionTab === 'contextlightembedder'}
+          <div class="lightbot-wrap">
+            <div class="seccion-header">
+              <h3>📦 ContextLightEmbedder</h3>
+            </div>
+            <p class="lightbot-desc">Genera la URL embebible de ContextLight (Gestión de Chatbot). Estos parámetros configuran el widget cuando se incrusta en otra página.</p>
+
+            <div class="lightbot-form">
+              <div class="lightbot-field">
+                <label for="cle-contexto">Contexto</label>
+                <select id="cle-contexto" bind:value={contextlightContexto}>
+                  <option value="">— Seleccionar —</option>
+                  {#each contextos as ctx}
+                    <option value={ctx}>{ctx}</option>
+                  {/each}
+                </select>
+              </div>
+            </div>
+
+            <div class="lightbot-preview">
+              <h4>📋 URL del widget</h4>
+              <code class="lightbot-url">{AMBIENTES[contextlightAmbiente]?.frontend ?? window.location.origin}/embed/contextlight.html?ambiente={contextlightAmbiente}</code>
+            </div>
+
+            <!-- Default actual + guardar -->
+            <div style="display:flex; align-items:center; gap:0.6rem; padding:0.75rem 1rem; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; margin-top:1rem; flex-wrap:wrap;">
+              <span style="color:rgba(255,255,255,0.6); font-size:0.85rem;">Default actual ({contextlightAmbiente}):</span>
+              {#if contextlightCargando}
+                <span style="color:rgba(255,255,255,0.6); font-size:0.9rem;">⟳ Cargando...</span>
+              {:else if contextlightGuardado.contexto}
+                <span style="color:#fff; font-weight:600; font-size:0.95rem;">⭐ {contextlightGuardado.contexto}</span>
+              {:else}
+                <span style="color:rgba(255,255,255,0.5); font-style:italic; font-size:0.9rem;">— Sin definir —</span>
+              {/if}
+            </div>
+
+            {#if contextlightErrorCargar}
+              <p style="color: #fff; font-size: 0.85rem; padding: 0.6rem 0.9rem; background: rgba(200,40,40,0.9); border-radius: 6px; margin-top: 0.6rem; font-weight: 500;">❌ {contextlightErrorCargar}</p>
+            {/if}
+
+            <div style="display:flex; align-items:center; gap:0.75rem; margin-top:0.75rem; flex-wrap:wrap;">
+              <button
+                class="vectorizacion-action-btn"
+                onclick={guardarContextlightDefaults}
+                disabled={!contextlightContexto || contextlightIgualAlGuardado() || contextlightCargando}
+                style="background:#198754; border-color:#198754;"
+              >
+                {#if contextlightIgualAlGuardado() && contextlightGuardado.contexto}
+                  ✓ Ya es el default
+                {:else}
+                  ⭐ Guardar como default
+                {/if}
+              </button>
+
+              {#if contextlightGuardadoFlash}
+                <span style="color:#4ade80; font-weight:600; font-size:0.9rem;">✓ Guardado: <strong>{contextlightGuardado.contexto}</strong></span>
+              {/if}
+            </div>
+
+            {#if contextlightErrorGuardar}
+              <p style="color: #fff; font-size: 0.85rem; padding: 0.6rem 0.9rem; background: rgba(200,40,40,0.9); border-radius: 6px; margin-top: 0.6rem; font-weight: 500;">❌ {contextlightErrorGuardar}</p>
+            {/if}
+          </div>
+        {/if}
+
+        <!-- ContextLight -->
+        {#if vectorizacionTab === 'contextlight'}
+          <div class="lightbot-wrap">
+            <div class="seccion-header">
+              <h3>Gestión de Chatbot</h3>
+            </div>
+            <p class="lightbot-desc">Visualizador del widget configurado en ContextLightEmbedder.</p>
+
+            {#if !contextlightContexto}
+              <p style="color: rgba(255,255,255,0.7); padding: 1rem; background: rgba(255,255,255,0.05); border-radius: 8px;">
+                Selecciona un contexto en <strong>📦 ContextLightEmbedder</strong> para ver el widget.
+              </p>
+            {:else}
+              {@const contextlightEmbedUrl = `${AMBIENTES[contextlightAmbiente]?.frontend ?? window.location.origin}/embed/contextlight.html?ambiente=${encodeURIComponent(contextlightAmbiente)}`}
+              <div style="display:flex; align-items:center; gap:0.6rem; padding:0.6rem 1rem; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; margin-bottom:1rem; flex-wrap:wrap; font-size:0.85rem; color:rgba(255,255,255,0.75);">
+                <span><strong>Ambiente:</strong> {contextlightAmbiente}</span>
+                <span>·</span>
+                <span><strong>Contexto:</strong> {contextlightContexto}</span>
+              </div>
+              <div style="width:100%; max-width:720px; height:70vh; min-height:520px; border:1px solid rgba(255,255,255,0.12); border-radius:12px; overflow:hidden; background:#fff; margin: 0 auto;">
+                <iframe
+                  src={contextlightEmbedUrl}
+                  title="ContextLight preview"
+                  style="width:100%; height:100%; border:0; display:block;"
+                ></iframe>
+              </div>
+            {/if}
           </div>
         {/if}
 
@@ -1686,6 +2035,227 @@
       <p class="disclaimer">MIDE · Museo Interactivo de Economía</p>
     </main>
   {/if}
+
+  <!-- Administración section -->
+  {#if activeTab === 'admin'}
+    <main class="vectorizacion-body">
+      <div class="vectorizacion-container">
+        <h2 style="color: white; margin-bottom: 1.5rem;">👤 Administración</h2>
+
+        <!-- Sub-tab bar -->
+        <div class="vectorizacion-subtabs">
+          <button
+            class="vectorizacion-subtab-btn"
+            class:active={adminTab === 'modelos'}
+            onclick={() => { adminTab = 'modelos'; cargarModelos(); }}
+          >
+            🤖 Modelos
+          </button>
+          <button
+            class="vectorizacion-subtab-btn"
+            class:active={adminTab === 'alias'}
+            onclick={() => { adminTab = 'alias'; cargarModelosEmbedding(); }}
+          >
+            🏷️ Alias
+          </button>
+          <button
+            class="vectorizacion-subtab-btn"
+            class:active={adminTab === 'defaultcontext'}
+            onclick={() => { adminTab = 'defaultcontext'; if (contextos.length === 0) cargarContextos(); }}
+          >
+            ⭐ DefaultContext
+          </button>
+        </div>
+
+        <!-- Modelos -->
+        {#if adminTab === 'modelos'}
+        <div class="modelos-wrap">
+          <div class="seccion-header">
+            <h3>🤖 Modelos Disponibles</h3>
+            <button onclick={cargarModelos} class="vectorizacion-action-btn" disabled={cargandoModelos}>
+              ↻ Recargar
+            </button>
+          </div>
+
+          {#if cargandoModelos}
+            <p style="color: rgba(255,255,255,0.6); font-size: 0.9rem; padding: 1rem 0;">⏳ Cargando modelos...</p>
+          {:else if errorModelos}
+            <p style="color: #fff; font-size: 0.9rem; padding: 1rem; background: rgba(200,40,40,0.9); border-radius: 4px; line-height: 1.5; font-weight: 500;">{errorModelos}</p>
+          {:else if modelosDisponibles.length === 0}
+            <p style="color: rgba(255,255,255,0.6); font-size: 0.9rem; padding: 1rem 0;">No hay modelos disponibles</p>
+          {:else}
+            <div class="modelos-grid">
+              {#each modelosDisponibles as modelo (modelo)}
+                <button
+                  class="modelo-card"
+                  class:active={modeloSeleccionado === modelo}
+                  onclick={() => { modeloSeleccionado = modelo; cargarInfoModelo(modelo); }}
+                >
+                  <span class="modelo-nombre">{modelo}</span>
+                </button>
+              {/each}
+            </div>
+          {/if}
+
+          {#if modeloSeleccionado && infoModeloSeleccionado}
+            <div class="modelo-detalle">
+              <h4>📋 Detalles de <strong>"{modeloSeleccionado}"</strong></h4>
+              {#if cargandoInfoModelo}
+                <p style="color: rgba(255,255,255,0.6); font-size: 0.9rem;">⏳ Cargando información...</p>
+              {:else}
+                <div class="modelo-propiedades">
+                  {#each Object.entries(infoModeloSeleccionado) as [key, value]}
+                    <div class="propiedad-item">
+                      <span class="propiedad-key">{key}:</span>
+                      <span class="propiedad-value">{typeof value === 'object' ? JSON.stringify(value) : String(value)}</span>
+                    </div>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+          {/if}
+        </div>
+        {/if}
+
+        <!-- Alias de modelos de embedding -->
+        {#if adminTab === 'alias'}
+        <div class="modelos-wrap" style="margin-top: 2rem;">
+          <div class="seccion-header">
+            <h3>🏷️ Alias de Modelos de Embedding</h3>
+            <button onclick={cargarModelosEmbedding} class="vectorizacion-action-btn" disabled={cargandoModelosEmbedding}>
+              ↻ Recargar
+            </button>
+          </div>
+          <p style="color: rgba(255,255,255,0.7); font-size: 0.9rem; margin: 0.25rem 0 1rem 0; line-height: 1.5;">
+            Cada contexto se nombra como <code style="background:rgba(0,0,0,0.25); padding:2px 6px; border-radius:4px;">mide-&lt;alias&gt;-&lt;chunk&gt;</code>.
+            Si dejas el alias vacío se usa la regla por defecto (texto antes del primer <code>-</code>, <code>_</code> o <code>:</code>),
+            lo cual puede causar colisiones entre modelos parecidos. Edita el alias para evitarlas.
+          </p>
+
+          {#if cargandoModelosEmbedding}
+            <p style="color: rgba(255,255,255,0.6); font-size: 0.9rem; padding: 1rem 0;">⏳ Cargando modelos de embedding...</p>
+          {/if}
+
+          {#snippet filaAlias(modelo, origen)}
+            <div class="alias-row">
+              <div class="alias-modelo">
+                <span class="alias-modelo-nombre">{modelo}</span>
+                <span class="alias-modelo-origen" data-origen={origen}>{origen}</span>
+              </div>
+              <input
+                type="text"
+                class="alias-input"
+                placeholder={modelo.split(/[-:_\s]/)[0].toLowerCase()}
+                value={MODELO_ALIAS[modelo] ?? ''}
+                oninput={(e) => { MODELO_ALIAS[modelo] = e.currentTarget.value; guardarAlias(); }}
+              />
+              <span class="alias-preview">→ mide-<strong>{aliasModeloEmbedding(modelo)}</strong>-1500</span>
+            </div>
+          {/snippet}
+
+          <div class="alias-grid">
+            {#if modelosEmbedding.length > 0}
+              <div class="alias-grupo">
+                <h4 class="alias-grupo-titulo">🦙 Ollama (locales)</h4>
+                {#each modelosEmbedding as modelo (modelo)}
+                  {@render filaAlias(modelo, 'ollama')}
+                {/each}
+              </div>
+            {/if}
+
+            <div class="alias-grupo">
+              <h4 class="alias-grupo-titulo">☁️ OpenAI</h4>
+              {#each MODELOS_EMBEDDING_OPENAI as modelo (modelo)}
+                {@render filaAlias(modelo, 'openai')}
+              {/each}
+            </div>
+
+            {#if Object.keys(MODELO_ALIAS).filter(m => !modelosEmbedding.includes(m) && !MODELOS_EMBEDDING_OPENAI.includes(m)).length > 0}
+              <div class="alias-grupo">
+                <h4 class="alias-grupo-titulo">📌 Otros (configurados manualmente)</h4>
+                {#each Object.keys(MODELO_ALIAS).filter(m => !modelosEmbedding.includes(m) && !MODELOS_EMBEDDING_OPENAI.includes(m)) as modelo (modelo)}
+                  {@render filaAlias(modelo, 'manual')}
+                {/each}
+              </div>
+            {/if}
+          </div>
+
+          <p style="color: rgba(255,255,255,0.5); font-size: 0.8rem; margin-top: 1rem;">
+            💾 Los cambios se guardan automáticamente en este navegador (localStorage).
+          </p>
+        </div>
+        {/if}
+
+        <!-- DefaultContext -->
+        {#if adminTab === 'defaultcontext'}
+        <div class="modelos-wrap">
+          <div class="seccion-header">
+            <h3>⭐ DefaultContext</h3>
+            <button onclick={cargarContextos} class="vectorizacion-action-btn" disabled={cargandoContextos}>
+              ↻ Recargar
+            </button>
+          </div>
+          <p style="color: rgba(255,255,255,0.7); font-size: 0.9rem; margin: 0.25rem 0 1rem 0; line-height: 1.5;">
+            Selecciona el contexto que se usará por defecto.
+          </p>
+
+          <!-- Badge: contexto default actual -->
+          <div style="display:flex; align-items:center; gap:0.6rem; padding:0.75rem 1rem; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; margin-bottom:1rem;">
+            <span style="color:rgba(255,255,255,0.6); font-size:0.85rem;">Default actual:</span>
+            {#if defaultContextGuardado}
+              <span style="color:#fff; font-weight:600; font-size:0.95rem;">⭐ {defaultContextGuardado}</span>
+            {:else}
+              <span style="color:rgba(255,255,255,0.5); font-style:italic; font-size:0.9rem;">— Sin definir —</span>
+            {/if}
+          </div>
+
+          <div class="lightbot-field" style="max-width: 420px;">
+            <label for="default-context-select">Contextos disponibles</label>
+            <select
+              id="default-context-select"
+              bind:value={defaultContext}
+              disabled={cargandoContextos}
+            >
+              <option value="">— Seleccionar —</option>
+              {#each contextos as ctx}
+                <option value={ctx}>{ctx}</option>
+              {/each}
+            </select>
+          </div>
+
+          <div style="display:flex; align-items:center; gap:0.75rem; margin-top:1rem; flex-wrap:wrap;">
+            <button
+              class="vectorizacion-action-btn"
+              onclick={guardarDefaultContext}
+              disabled={!defaultContext || defaultContext === defaultContextGuardado}
+              style="background:#198754; border-color:#198754;"
+            >
+              {#if defaultContext === defaultContextGuardado && defaultContextGuardado}
+                ✓ Ya es el default
+              {:else}
+                ⭐ Guardar como default
+              {/if}
+            </button>
+
+            {#if defaultContextGuardadoFlash}
+              <span style="color:#4ade80; font-weight:600; font-size:0.9rem;">✓ Guardado: <strong>{defaultContextGuardado}</strong></span>
+            {/if}
+          </div>
+
+          {#if cargandoContextos}
+            <p style="color: rgba(255,255,255,0.6); font-size: 0.9rem; padding: 0.75rem 0;">⏳ Cargando contextos...</p>
+          {:else if contextos.length === 0}
+            <p style="color: rgba(255,255,255,0.6); font-size: 0.9rem; padding: 0.75rem 0;">No hay contextos disponibles. Pulsa ↻ Recargar.</p>
+          {/if}
+
+          <p style="color: rgba(255,255,255,0.5); font-size: 0.8rem; margin-top: 1rem;">
+            💾 La selección se guarda en este navegador (localStorage).
+          </p>
+        </div>
+        {/if}
+      </div>
+    </main>
+  {/if}
 </div>
 
 <style>
@@ -1715,6 +2285,294 @@
     transition: background 0.5s ease;
   }
 
+  .app.vectorizacion {
+    background: linear-gradient(160deg, #ffaa00 0%, #ffc040 40%, #ffe8a0 75%, #ffffff 100%);
+  }
+
+  /* Textos del contenido en modo Construcción → azul marino */
+  .app.vectorizacion .seccion-header h3,
+  .app.vectorizacion .contextos-table-wrap h3,
+  .app.vectorizacion .crear-contexto-wrap h3 {
+    color: #0a1a3a;
+  }
+
+  .app.vectorizacion .contexto-nombre {
+    color: #0a1a3a;
+  }
+
+  .app.vectorizacion .contexto-row {
+    background: rgba(10, 26, 58, 0.08);
+    border-left-color: rgba(10, 26, 58, 0.4);
+  }
+
+  .app.vectorizacion .contexto-row:hover {
+    background: rgba(10, 26, 58, 0.15);
+    border-left-color: rgba(10, 26, 58, 0.7);
+  }
+
+  .app.vectorizacion .form-field label {
+    color: rgba(10, 26, 58, 0.7);
+  }
+
+  .app.vectorizacion .field-hint {
+    color: rgba(10, 26, 58, 0.55);
+  }
+
+  .app.vectorizacion .contexto-input {
+    color: #0a1a3a;
+    background: rgba(10, 26, 58, 0.15);
+    border-color: #0b1f4a;
+    border-width: 2px;
+  }
+
+  .app.vectorizacion .contexto-input::placeholder {
+    color: rgba(10, 26, 58, 0.5);
+  }
+
+  .app.vectorizacion .contexto-input:focus {
+    border-color: #0a1a3a;
+    background: rgba(10, 26, 58, 0.2);
+    box-shadow: 0 0 0 3px rgba(10, 26, 58, 0.1);
+  }
+
+  .app.vectorizacion .contexto-select {
+    color: #0a1a3a;
+    background: rgba(10, 26, 58, 0.15);
+    border-color: #0b1f4a;
+    border-width: 2px;
+  }
+
+  .app.vectorizacion .contexto-select:focus {
+    outline: none;
+    border-color: #0a1a3a;
+    background: rgba(10, 26, 58, 0.2);
+    box-shadow: 0 0 0 3px rgba(10, 26, 58, 0.1);
+  }
+
+  .app.vectorizacion .contexto-select option {
+    background: #0b1f4a;
+    color: #fff;
+  }
+
+  .app.vectorizacion .contextos-table-wrap,
+  .app.vectorizacion .crear-contexto-wrap {
+    background: rgba(255, 255, 255, 0.35);
+    border-color: #0b1f4a;
+  }
+
+  .app.vectorizacion .crear-contexto-btn {
+    background: rgba(10, 50, 160, 0.75);
+    border-color: rgba(10, 50, 160, 0.9);
+    color: #fff;
+  }
+
+  .app.vectorizacion .crear-contexto-btn:hover:not(:disabled) {
+    background: rgba(10, 50, 160, 0.95);
+    border-color: #0a32a0;
+  }
+
+  .app.vectorizacion .vectorizacion-subtabs {
+    background: #0b1f4a;
+    border-color: rgba(255, 255, 255, 0.1);
+  }
+
+  .app.vectorizacion .vectorizacion-subtab-btn {
+    color: rgba(255, 255, 255, 0.9);
+  }
+
+  .app.vectorizacion .vectorizacion-subtab-btn:hover:not(.active) {
+    color: rgba(255, 255, 255, 0.85);
+    background: rgba(255, 255, 255, 0.1);
+  }
+
+  .app.vectorizacion .subtab-arrow-indicator {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: #ffd75e;
+    font-size: 1.6rem;
+    font-weight: 900;
+    line-height: 1;
+    padding: 0 0.4rem;
+    text-shadow: 0 0 8px rgba(255, 215, 94, 0.7);
+    animation: subtab-arrow-pulse 1.2s ease-in-out infinite;
+    user-select: none;
+  }
+
+  @keyframes subtab-arrow-pulse {
+    0%, 100% { transform: translateX(0); opacity: 0.85; }
+    50% { transform: translateX(4px); opacity: 1; }
+  }
+
+  .app.vectorizacion .vectorizacion-subtab-btn.active {
+    background: #2952cc;
+    color: #fff;
+    box-shadow: 0 1px 6px rgba(10, 26, 80, 0.4);
+  }
+
+  .app.vectorizacion .vectorizacion-subtab-btn:disabled:not(.active) {
+    opacity: 0.45;
+    cursor: default;
+  }
+
+  .app.vectorizacion .vectorizacion-subtab-btn:disabled.active {
+    opacity: 1;
+    cursor: default;
+  }
+
+  .app.vectorizacion .header {
+    background: #c8960a;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    border-bottom-color: rgba(0, 0, 0, 0.15);
+  }
+
+  .app.vectorizacion .tab-btn {
+    color: #0b1f4a;
+  }
+
+  .app.vectorizacion .tab-btn:hover:not(:disabled) {
+    color: #0b1f4a;
+    opacity: 0.75;
+  }
+
+  .app.vectorizacion .tab-btn.active {
+    color: #0b1f4a;
+    border-bottom-color: #0b1f4a;
+  }
+
+  .app.vectorizacion .ambiente-toggle {
+    background: #0b1f4a;
+    border-color: rgba(255, 255, 255, 0.1);
+    margin-left: auto;
+    padding: 4px;
+    gap: 4px;
+  }
+
+  .app.vectorizacion .ambiente-btn {
+    font-size: 0.8rem;
+    padding: 5px 13px;
+    color: rgba(255, 255, 255, 0.9);
+  }
+
+  .app.vectorizacion .ambiente-btn.active {
+    background: #2952cc;
+    color: #fff;
+    box-shadow: 0 1px 6px rgba(10, 26, 80, 0.4);
+  }
+
+  /* Construcción tab - navy blue text throughout */
+  .app.vectorizacion {
+    color: #0a1a3a;
+  }
+
+  .app.vectorizacion h2,
+  .app.vectorizacion h3,
+  .app.vectorizacion h4,
+  .app.vectorizacion p,
+  .app.vectorizacion label,
+  .app.vectorizacion span {
+    color: #0a1a3a;
+  }
+
+  .app.vectorizacion .context-select-wrap label {
+    color: rgba(10, 26, 58, 0.7);
+  }
+
+  .app.vectorizacion .context-select-wrap select {
+    color: #0a1a3a;
+  }
+
+  .app.vectorizacion .ctx-loading {
+    color: rgba(10, 26, 58, 0.55);
+  }
+
+  /* Documentos subtab - same color scheme as Contextos */
+  .app.vectorizacion .documentos-wrap,
+  .app.vectorizacion .integrar-documento-wrap {
+    background: rgba(255, 255, 255, 0.35);
+    border-color: #0b1f4a;
+  }
+
+  .app.vectorizacion .documentos-wrap h3,
+  .app.vectorizacion .integrar-documento-wrap h3,
+  .app.vectorizacion .documentos-list-wrap h4 {
+    color: #0a1a3a;
+  }
+
+  .app.vectorizacion .documentos-contexto-select {
+    background: rgba(10, 26, 58, 0.08);
+    border-color: rgba(10, 26, 58, 0.2);
+  }
+
+  .app.vectorizacion .documentos-contexto-select label {
+    color: rgba(10, 26, 58, 0.7);
+  }
+
+  .app.vectorizacion .documentos-table {
+    background: rgba(10, 26, 58, 0.08);
+    border-color: rgba(10, 26, 58, 0.15);
+  }
+
+  .app.vectorizacion .documento-row {
+    background: rgba(10, 26, 58, 0.08);
+    border-left-color: rgba(10, 26, 58, 0.4);
+  }
+
+  .app.vectorizacion .documento-row:hover {
+    background: rgba(10, 26, 58, 0.15);
+  }
+
+  .app.vectorizacion .documento-nombre {
+    color: #0a1a3a;
+  }
+
+  .app.vectorizacion .documento-borrar-btn:hover:not(:disabled) {
+    filter: brightness(1) drop-shadow(0 0 6px rgba(255, 200, 50, 0.9)) drop-shadow(0 0 12px rgba(255, 170, 0, 0.6));
+    background: rgba(255, 80, 80, 0.18);
+  }
+
+  .app.vectorizacion .documento-input {
+    color: #0a1a3a;
+    background: rgba(10, 26, 58, 0.08);
+    border-color: #0b1f4a;
+  }
+
+  .app.vectorizacion .documento-input::file-selector-button {
+    background: rgba(10, 50, 160, 0.75);
+    border-color: rgba(10, 50, 160, 0.9);
+  }
+
+  .app.vectorizacion .documento-input::file-selector-button:hover {
+    background: rgba(10, 50, 160, 0.95);
+  }
+
+  .app.vectorizacion .integrar-documento-form small {
+    color: rgba(10, 26, 58, 0.65);
+  }
+
+  .app.vectorizacion .integrar-documento-btn {
+    background: rgba(10, 50, 160, 0.75);
+    border-color: rgba(10, 50, 160, 0.9);
+    color: #fff;
+  }
+
+  .app.vectorizacion .integrar-documento-btn:hover:not(:disabled) {
+    background: rgba(10, 50, 160, 0.95);
+    border-color: #0a32a0;
+  }
+
+  .app.vectorizacion .vectorizacion-action-btn {
+    background: rgba(10, 26, 58, 0.12);
+    border: 1px solid #0b1f4a;
+    color: #0a1a3a;
+  }
+
+  .app.vectorizacion .vectorizacion-action-btn:hover:not(:disabled) {
+    background: rgba(10, 26, 58, 0.22);
+    border-color: #0b1f4a;
+  }
+
   .app.admin {
     background: linear-gradient(160deg, #001a4d 0%, #003d99 30%, #0055cc 60%, #0077ff 100%);
   }
@@ -1736,7 +2594,7 @@
   .header-left {
     display: flex;
     align-items: center;
-    gap: 1rem;
+    gap: 2rem;
   }
 
   .avatar {
@@ -1865,87 +2723,6 @@
     background: rgba(255, 255, 255, 0.22);
     color: #fff;
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
-  }
-
-  /* ── Model toggle ────────────────────────────────── */
-  .model-toggle {
-    display: flex;
-    gap: 4px;
-    background: rgba(0, 0, 0, 0.2);
-    padding: 4px;
-    border-radius: 20px;
-    border: 1px solid rgba(255, 255, 255, 0.15);
-  }
-
-  .model-btn {
-    width: auto;
-    height: auto;
-    border-radius: 16px;
-    border: none;
-    background: transparent;
-    color: rgba(255, 255, 255, 0.65);
-    font-family: inherit;
-    font-size: 0.75rem;
-    font-weight: 600;
-    padding: 4px 12px;
-    cursor: pointer;
-    transition: background 0.2s, color 0.2s, transform 0.15s;
-    box-shadow: none;
-    letter-spacing: 0.02em;
-  }
-
-  .model-btn:hover:not(:disabled) {
-    background: rgba(255, 255, 255, 0.15);
-    color: #fff;
-    transform: none;
-  }
-
-  .model-btn.active {
-    background: #fff;
-    color: #c8102e;
-    box-shadow: 0 1px 6px rgba(0, 0, 0, 0.25);
-  }
-
-  .model-btn.active:hover:not(:disabled) {
-    background: #f0f0f0;
-  }
-
-  .model-toggle-openai {
-    border-color: rgba(16, 163, 127, 0.35);
-  }
-
-  .model-toggle-openai .model-toggle-label {
-    color: #fff;
-  }
-
-  .model-toggle-label {
-    font-size: 0.6rem;
-    font-weight: 700;
-    color: rgba(16, 163, 127, 0.8);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    padding: 0 4px;
-    align-self: center;
-  }
-
-  .model-btn-openai {
-    color: rgba(255, 255, 255, 0.55);
-    white-space: nowrap;
-  }
-
-  .model-btn-openai:hover:not(:disabled) {
-    background: rgba(16, 163, 127, 0.2);
-    color: #fff;
-  }
-
-  .model-btn-openai.active {
-    background: rgb(16, 163, 127);
-    color: #fff;
-    box-shadow: 0 1px 6px rgba(16, 163, 127, 0.4);
-  }
-
-  .model-btn-openai.active:hover:not(:disabled) {
-    background: rgb(13, 140, 108);
   }
 
   /* ── Chat body ───────────────────────────────────── */
@@ -2306,6 +3083,30 @@
     border: none;
     margin-left: auto;
     border-bottom: 2px solid rgba(255, 255, 255, 0.2);
+    align-items: center;
+  }
+
+  .admin-gear-btn {
+    font-size: 1.4rem;
+    padding: 0.5rem 0.75rem;
+    margin-left: auto;
+    opacity: 0.7;
+    line-height: 1;
+    border-bottom: none !important;
+    bottom: 0;
+    transition: opacity 0.2s ease, transform 0.2s ease;
+  }
+
+  .admin-gear-btn:hover:not(:disabled) {
+    opacity: 1;
+    transform: rotate(30deg);
+  }
+
+  .admin-gear-btn,
+  .admin-gear-btn.active,
+  .admin-gear-btn:hover:not(:disabled) {
+    border-bottom: none !important;
+    bottom: 0;
   }
 
   .tab-btn {
@@ -2316,11 +3117,11 @@
     background: transparent;
     color: rgba(255, 255, 255, 0.6);
     font-family: inherit;
-    font-size: 0.85rem;
+    font-size: 0.95rem;
     font-weight: 600;
     padding: 0.75rem 1.5rem;
     cursor: pointer;
-    transition: all 0.25s ease;
+    transition: color 0.25s ease;
     box-shadow: none;
     letter-spacing: 0.01em;
     white-space: nowrap;
@@ -2333,15 +3134,28 @@
     color: rgba(255, 255, 255, 0.85);
   }
 
-  .tab-btn.active {
+  .tab-btn.active:not(.admin-gear-btn) {
     color: #fff;
     border-bottom-color: #fff;
     background: transparent;
     box-shadow: none;
   }
 
+  /* ── Chat sub-nav ───────────────────────────────── */
+  .chat-subnav {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 1.25rem;
+    flex-wrap: wrap;
+    padding: 0.5rem 1.5rem;
+    background: rgba(0, 0, 0, 0.18);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    backdrop-filter: blur(8px);
+  }
+
   /* ── Admin Body ──────────────────────────────────── */
-  .admin-body {
+  .vectorizacion-body {
     flex: 1;
     overflow-y: auto;
     padding: 2rem 1.5rem;
@@ -2349,7 +3163,7 @@
     min-width: 0;
   }
 
-  .admin-container {
+  .vectorizacion-container {
     max-width: 1200px;
     width: 100%;
     margin: 0 auto;
@@ -2411,7 +3225,7 @@
   }
 
   /* ── Admin Sub-tabs ──────────────────────────────── */
-  .admin-subtabs {
+  .vectorizacion-subtabs {
     display: inline-flex;
     gap: 0.5rem;
     margin-bottom: 2rem;
@@ -2421,7 +3235,7 @@
     border: 1px solid rgba(255, 255, 255, 0.12);
   }
 
-  .admin-subtab-btn {
+  .vectorizacion-subtab-btn {
     display: inline-flex;
     align-items: center;
     gap: 0.35rem;
@@ -2440,12 +3254,12 @@
     min-width: max-content;
   }
 
-  .admin-subtab-btn:hover:not(.active) {
+  .vectorizacion-subtab-btn:hover:not(.active) {
     color: rgba(255, 255, 255, 0.8);
     background: rgba(255, 255, 255, 0.08);
   }
 
-  .admin-subtab-btn.active {
+  .vectorizacion-subtab-btn.active {
     background: rgba(255, 255, 255, 0.18);
     color: #fff;
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
@@ -2462,7 +3276,7 @@
     border-radius: 12px;
   }
 
-  .admin-action-btn {
+  .vectorizacion-action-btn {
     background: rgba(255, 255, 255, 0.2);
     border: 1px solid rgba(255, 255, 255, 0.3);
     color: #fff;
@@ -2478,9 +3292,16 @@
     min-width: max-content;
   }
 
-  .admin-action-btn:hover {
+  .vectorizacion-action-btn:hover {
     background: rgba(255, 255, 255, 0.3);
     border-color: rgba(255, 255, 255, 0.5);
+  }
+
+  .contextos-recargar-btn {
+    padding: 0.4rem 0.6rem;
+    min-width: 0;
+    line-height: 1;
+    font-size: 1.35rem;
   }
 
   .logs-table {
@@ -2583,6 +3404,51 @@
     flex: 1;
   }
 
+  .contexto-borrar-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 1.15rem;
+    padding: 0.25rem 0.4rem;
+    border-radius: 6px;
+    opacity: 1;
+    transition: opacity 0.15s, background 0.15s;
+    line-height: 1;
+    flex-shrink: 0;
+    filter: drop-shadow(0 1px 4px rgba(0,0,0,0.55)) brightness(0.6);
+  }
+
+  .contexto-editar-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 1.05rem;
+    padding: 0.25rem 0.4rem;
+    border-radius: 6px;
+    opacity: 1;
+    transition: opacity 0.15s, background 0.15s;
+    line-height: 1;
+    flex-shrink: 0;
+    filter: drop-shadow(0 1px 4px rgba(0,0,0,0.55)) brightness(0.6);
+  }
+
+  .contexto-editar-btn:hover:not(:disabled) {
+    opacity: 1;
+    filter: brightness(1) drop-shadow(0 0 6px rgba(255, 200, 50, 0.9)) drop-shadow(0 0 12px rgba(255, 170, 0, 0.6));
+    background: rgba(80, 130, 255, 0.18);
+  }
+
+  .contexto-borrar-btn:hover:not(:disabled) {
+    opacity: 1;
+    filter: brightness(1) drop-shadow(0 0 6px rgba(255, 200, 50, 0.9)) drop-shadow(0 0 12px rgba(255, 170, 0, 0.6));
+    background: rgba(255, 80, 80, 0.18);
+  }
+
+  .contexto-borrar-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.2;
+  }
+
   .recargar-btn {
     align-self: flex-start;
     margin-top: 0.5rem;
@@ -2607,9 +3473,35 @@
     background: rgba(255, 255, 255, 0.08);
     border: 1px solid rgba(255, 255, 255, 0.15);
     border-radius: 12px;
-    padding: 1.5rem;
+    padding: 1.25rem 1.5rem;
     backdrop-filter: blur(8px);
     margin-bottom: 2rem;
+  }
+
+  .crear-contexto-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 0;
+    width: 100%;
+    text-align: left;
+  }
+
+  .crear-contexto-toggle h3 {
+    color: #fff;
+    font-size: 1rem;
+    font-weight: 600;
+    margin: 0;
+  }
+
+  .crear-contexto-toggle-icon {
+    color: #fff;
+    font-size: 0.85rem;
+    line-height: 1;
+    transition: transform 0.2s ease;
   }
 
   .crear-contexto-wrap h3 {
@@ -2617,6 +3509,11 @@
     font-size: 1rem;
     margin-bottom: 1rem;
     font-weight: 600;
+  }
+
+  .crear-contexto-wrap.abierto .crear-contexto-form,
+  .crear-contexto-wrap.abierto .mensaje-contexto {
+    margin-top: 1.25rem;
   }
 
   .crear-contexto-form {
@@ -2730,86 +3627,6 @@
     background: rgba(0, 200, 0, 0.2);
     border-color: rgba(0, 200, 0, 0.4);
     color: rgba(100, 255, 100, 1);
-  }
-
-  /* ── Borrar Contexto Form ────────────────────────── */
-  .borrar-contexto-wrap {
-    background: rgba(255, 255, 255, 0.08);
-    border: 1px solid rgba(255, 255, 255, 0.15);
-    border-radius: 12px;
-    padding: 1.5rem;
-    backdrop-filter: blur(8px);
-    margin-bottom: 2rem;
-  }
-
-  .borrar-contexto-wrap h3 {
-    color: #fff;
-    font-size: 1rem;
-    margin-bottom: 1rem;
-    font-weight: 600;
-  }
-
-  .borrar-contexto-form {
-    display: flex;
-    gap: 1rem;
-    margin-bottom: 1rem;
-    align-items: flex-end;
-  }
-
-  .contexto-select {
-    padding: 0.75rem;
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    border-radius: 8px;
-    background: rgba(0, 0, 0, 0.2);
-    color: #fff;
-    font-family: inherit;
-    font-size: 0.9rem;
-    cursor: pointer;
-    transition: border-color 0.2s ease, background 0.2s ease;
-    width: 100%;
-  }
-
-  .contexto-select:focus {
-    outline: none;
-    border-color: rgba(200, 50, 50, 0.8);
-    background: rgba(0, 0, 0, 0.3);
-  }
-
-  .contexto-select:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-
-  .contexto-select option {
-    background: #1a1a1a;
-    color: #fff;
-  }
-
-  .borrar-contexto-btn {
-    padding: 0.75rem 1.5rem;
-    background: rgba(200, 50, 50, 0.3);
-    border: 1px solid rgba(200, 50, 50, 0.5);
-    border-radius: 8px;
-    color: #fff;
-    font-family: inherit;
-    font-size: 0.9rem;
-    font-weight: 600;
-    cursor: pointer;
-    transition: background 0.2s ease, border-color 0.2s ease;
-    white-space: nowrap;
-    flex-shrink: 0;
-    min-width: max-content;
-    align-self: flex-end;
-  }
-
-  .borrar-contexto-btn:hover:not(:disabled) {
-    background: rgba(200, 50, 50, 0.5);
-    border-color: rgba(200, 50, 50, 0.8);
-  }
-
-  .borrar-contexto-btn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
   }
 
   /* ── Modal Confirmación ───────────────────────────── */
@@ -2942,6 +3759,35 @@
     min-width: 200px;
   }
 
+  .contexto-select {
+    padding: 0.75rem;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 8px;
+    background: rgba(0, 0, 0, 0.2);
+    color: #fff;
+    font-family: inherit;
+    font-size: 0.9rem;
+    cursor: pointer;
+    transition: border-color 0.2s ease, background 0.2s ease;
+    width: 100%;
+  }
+
+  .contexto-select:focus {
+    outline: none;
+    border-color: rgba(0, 200, 255, 0.6);
+    background: rgba(0, 0, 0, 0.3);
+  }
+
+  .contexto-select:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .contexto-select option {
+    background: #1a1a1a;
+    color: #fff;
+  }
+
   .documentos-list-wrap {
     margin-bottom: 1.5rem;
   }
@@ -2981,6 +3827,30 @@
     color: rgba(255, 255, 255, 0.9);
     font-size: 0.9rem;
     word-break: break-word;
+    flex: 1;
+  }
+
+  .documento-borrar-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 1.1rem;
+    padding: 0.2rem 0.4rem;
+    border-radius: 6px;
+    flex-shrink: 0;
+    filter: drop-shadow(0 1px 4px rgba(0,0,0,0.55)) brightness(0.6);
+    transition: filter 0.15s, background 0.15s;
+    line-height: 1;
+  }
+
+  .documento-borrar-btn:hover:not(:disabled) {
+    filter: brightness(1) drop-shadow(0 0 6px rgba(255, 200, 50, 0.9)) drop-shadow(0 0 12px rgba(255, 170, 0, 0.6));
+    background: rgba(255, 80, 80, 0.18);
+  }
+
+  .documento-borrar-btn:disabled {
+    opacity: 0.2;
+    cursor: not-allowed;
   }
 
   /* ── Integrar Documento Form ─────────────────────── */
@@ -3112,21 +3982,7 @@
   }
 
   /* ── Borrar Documento Form ───────────────────────── */
-  .borrar-documento-wrap {
-    background: rgba(255, 255, 255, 0.08);
-    border: 1px solid rgba(255, 255, 255, 0.15);
-    border-radius: 12px;
-    padding: 1.5rem;
-    backdrop-filter: blur(8px);
-    margin-bottom: 2rem;
-  }
-
-  .borrar-documento-wrap h3 {
-    color: #fff;
-    font-size: 1rem;
-    margin-bottom: 1rem;
-    font-weight: 600;
-  }
+  /* (removed — trash button now inline per document row) */
 
   .borrar-documento-form {
     display: flex;
@@ -3272,6 +4128,97 @@
     font-size: 0.85rem;
     word-break: break-word;
     font-family: 'Monaco', 'Courier New', monospace;
+  }
+
+  /* ── Alias de Modelos de Embedding ─────────────── */
+  .alias-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+  }
+
+  .alias-grupo-titulo {
+    color: rgba(255, 255, 255, 0.85);
+    font-size: 0.95rem;
+    margin: 0 0 0.5rem 0;
+    padding-bottom: 0.4rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  }
+
+  .alias-row {
+    display: grid;
+    grid-template-columns: minmax(220px, 1fr) 180px minmax(180px, 1fr);
+    gap: 0.75rem;
+    align-items: center;
+    padding: 0.5rem 0;
+  }
+
+  .alias-modelo {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    min-width: 0;
+  }
+
+  .alias-modelo-nombre {
+    color: rgba(255, 255, 255, 0.95);
+    font-size: 0.9rem;
+    font-family: 'Monaco', 'Courier New', monospace;
+    word-break: break-all;
+  }
+
+  .alias-modelo-origen {
+    font-size: 0.7rem;
+    color: rgba(255, 255, 255, 0.5);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .alias-modelo-origen[data-origen="ollama"] { color: rgba(120, 220, 120, 0.8); }
+  .alias-modelo-origen[data-origen="openai"] { color: rgba(120, 200, 255, 0.8); }
+  .alias-modelo-origen[data-origen="manual"] { color: rgba(255, 200, 120, 0.8); }
+
+  .alias-input {
+    background: rgba(0, 0, 0, 0.3);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: white;
+    border-radius: 6px;
+    padding: 0.5rem 0.75rem;
+    font-size: 0.9rem;
+    font-family: 'Monaco', 'Courier New', monospace;
+    transition: border-color 0.15s;
+  }
+
+  .alias-input:focus {
+    outline: none;
+    border-color: rgba(120, 200, 255, 0.6);
+    background: rgba(0, 0, 0, 0.4);
+  }
+
+  .alias-input::placeholder {
+    color: rgba(255, 255, 255, 0.3);
+    font-style: italic;
+  }
+
+  .alias-preview {
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 0.85rem;
+    font-family: 'Monaco', 'Courier New', monospace;
+    word-break: break-all;
+  }
+
+  .alias-preview strong {
+    color: rgba(120, 220, 180, 0.95);
+    font-weight: 600;
+  }
+
+  @media (max-width: 720px) {
+    .alias-row {
+      grid-template-columns: 1fr;
+      gap: 0.4rem;
+      padding: 0.75rem 0;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    }
   }
 
   /* ── Lightbot Section ──────────────────────────── */

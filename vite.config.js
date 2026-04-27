@@ -12,6 +12,7 @@ export default defineConfig(({ mode }) => {
         input: {
           main: resolve(__dirname, 'index.html'),
           embed: resolve(__dirname, 'embed/index.html'),
+          contextlight: resolve(__dirname, 'embed/contextlight.html'),
         },
       },
     },

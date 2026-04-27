@@ -14,7 +14,7 @@
     ? 'staging'
     : 'producción';
 
-  // Leer parámetros del iframe/URL: ?ambiente=producción&contexto=faqs&modelo=mistral
+  // Leer SOLO el ambiente desde la URL: ?ambiente=producción
   const params = new URLSearchParams(window.location.search);
   const ambienteParam = params.get('ambiente') || DEFAULT_AMBIENTE;
 
@@ -31,12 +31,14 @@
   });
 
   // ─── Estado ──────────────────────────────────────────
-  let contextos = $state([]);
-  let contextoSeleccionado = $state(params.get('contexto') || '');
-  let modelo = $state(params.get('modelo') || 'mistral');
+  let contextoSeleccionado = $state('');
+  let modelo = $state('mistral');
+  let maxTurnos = $state(5);
   let inputText = $state('');
   let isLoading = $state(false);
   let chatContainer;
+  let configError = $state('');
+  let configCargada = $state(false);
 
   function formatTime(date) {
     return date.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' });
@@ -50,36 +52,30 @@
   };
 
   let messages = $state([{ ...MENSAJE_INICIAL }]);
-  let maxTurnos = 5;
 
-  // ─── Cargar contextos ────────────────────────────────
-  async function cargarContextos() {
+  // ─── Cargar config del backend ───────────────────────
+  async function cargarConfig() {
+    configError = '';
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 10000);
-      const res = await fetch(`${apiUrl.base}/listarContextos`, { signal: controller.signal });
+      const res = await fetch(`${apiUrl.base}/configLightbot`, { signal: controller.signal });
       clearTimeout(timeout);
+      if (res.status === 404) {
+        configError = `No hay configuración para el ambiente "${ambienteSeleccionado}". Defínela desde la administración.`;
+        return;
+      }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-
-      let mapa = {};
-      if (data['Contextos existentes para este chatbot']) {
-        mapa = data['Contextos existentes para este chatbot'];
-      } else if (Array.isArray(data)) {
-        contextos = data;
-        if (!contextoSeleccionado && contextos.length > 0) contextoSeleccionado = contextos[0];
-        return;
-      } else if (data.contextos && typeof data.contextos === 'object') {
-        mapa = data.contextos;
-      } else {
-        const firstObjKey = Object.keys(data).find(k => typeof data[k] === 'object' && data[k] !== null);
-        if (firstObjKey) mapa = data[firstObjKey];
+      contextoSeleccionado = data.contexto ?? '';
+      modelo = data.modelo ?? 'mistral';
+      maxTurnos = typeof data.historial === 'number' ? data.historial : 5;
+      configCargada = true;
+      if (!contextoSeleccionado) {
+        configError = `La configuración del ambiente "${ambienteSeleccionado}" no tiene contexto.`;
       }
-
-      contextos = Array.isArray(mapa) ? mapa : Object.keys(mapa);
-      if (!contextoSeleccionado && contextos.length > 0) contextoSeleccionado = contextos[0];
     } catch (err) {
-      console.warn('Error cargando contextos:', err.message);
+      configError = `No se pudo cargar la configuración: ${err.message}`;
     }
   }
 
@@ -181,7 +177,7 @@
   }
 
   onMount(() => {
-    cargarContextos();
+    cargarConfig();
   });
 </script>
 
@@ -200,6 +196,10 @@
       {/if}
     </div>
   </header>
+
+  {#if configError}
+    <div class="config-error">❌ {configError}</div>
+  {/if}
 
   <!-- Chat body -->
   <main class="embed-body" bind:this={chatContainer}>
@@ -243,13 +243,13 @@
       <textarea
         bind:value={inputText}
         onkeydown={handleKeydown}
-        placeholder="Escribe tu mensaje..."
+        placeholder={configCargada ? "Escribe tu mensaje..." : "Cargando configuración..."}
         rows="1"
-        disabled={isLoading}
+        disabled={isLoading || !configCargada || !!configError}
       ></textarea>
       <button
         onclick={sendMessage}
-        disabled={!inputText.trim() || isLoading}
+        disabled={!inputText.trim() || isLoading || !configCargada || !!configError}
         aria-label="Enviar mensaje"
       >
         <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -286,6 +286,16 @@
     flex-direction: column;
     height: 100dvh;
     background: #f0f2f5;
+  }
+
+  .config-error {
+    background: #c8102e;
+    color: #fff;
+    padding: 0.55rem 1rem;
+    font-size: 0.8rem;
+    line-height: 1.4;
+    text-align: center;
+    flex-shrink: 0;
   }
 
   /* ── Header ─────────────────────────── */
