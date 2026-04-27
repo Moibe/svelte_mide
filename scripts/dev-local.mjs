@@ -56,7 +56,7 @@ function shutdown(signal = 'SIGTERM') {
 process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 
-function waitForApiReady(host, port, timeoutMs = 20000) {
+function waitForApiReady(host, port, timeoutMs = 90000) {
   const start = Date.now();
 
   return new Promise((resolveReady, rejectReady) => {
@@ -92,9 +92,30 @@ async function startWebWhenApiIsReady() {
     
     web = spawn(npmCmd, ['run', 'dev:web'], {
       cwd: rootDir,
-      stdio: 'inherit',
+      stdio: ['inherit', 'pipe', 'pipe'],
       shell: process.platform === 'win32',
     });
+
+    let frontendUrlPrinted = false;
+    const ansiRegex = /\x1b\[[0-9;]*m/g;
+
+    if (web.stdout) {
+      web.stdout.on('data', (chunk) => {
+        process.stdout.write(chunk);
+        if (frontendUrlPrinted) return;
+        const clean = chunk.toString().replace(ansiRegex, '');
+        const match = clean.match(/Local:\s+(https?:\/\/[^\s]+)/);
+        if (match) {
+          frontendUrlPrinted = true;
+          console.log(`\n[dev] 🌐 Frontend listo en ${match[1]}`);
+          console.log(`[dev] 🔌 API en http://${API_HOST}:${API_PORT}\n`);
+        }
+      });
+    }
+
+    if (web.stderr) {
+      web.stderr.on('data', (chunk) => process.stderr.write(chunk));
+    }
 
     web.on('exit', (code) => {
       if (!shuttingDown) {

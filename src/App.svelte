@@ -1,6 +1,13 @@
 <script>
   import { tick, onMount, untrack } from 'svelte';
 
+  // Detección de fallback de SPA: el host devolvió este index.html para una URL que no
+  // corresponde al admin. Distinguimos entre embed (URL bajo /embed/*) y resto.
+  const _pathname = typeof window !== 'undefined' ? window.location.pathname : '/';
+  const isAdminRoot = _pathname === '/' || _pathname === '/index.html';
+  const isEmbedFallback404 = _pathname.startsWith('/embed/');
+  const isGenericFallback404 = !isAdminRoot && !isEmbedFallback404;
+
   // ─── Sesión & Logs ───────────────────────────────────────────────
   function generateSessionId() {
     if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -1184,6 +1191,32 @@
   }
 </script>
 
+{#if isEmbedFallback404}
+  <div class="embed-404">
+    <div class="embed-404-card">
+      <div class="embed-404-code">404</div>
+      <h1>App embebida no disponible</h1>
+      <p>La URL solicitada no corresponde a ninguna app embebida desplegada:</p>
+      <code class="embed-404-path">{window.location.pathname}{window.location.search}</code>
+      <p class="embed-404-hint">Verifica con tu administrador que el archivo HTML de la app embebida esté presente en el servidor.</p>
+    </div>
+  </div>
+{/if}
+
+{#if isGenericFallback404}
+  <div class="embed-404">
+    <div class="embed-404-card">
+      <div class="embed-404-code">404</div>
+      <h1>Página no encontrada</h1>
+      <p>La URL solicitada no existe en este sitio:</p>
+      <code class="embed-404-path">{window.location.pathname}{window.location.search}</code>
+      <p class="embed-404-hint">Verifica el enlace o regresa al inicio.</p>
+      <a class="embed-404-link" href="/">← Ir al inicio</a>
+    </div>
+  </div>
+{/if}
+
+{#if isAdminRoot}
 <div class="app" class:vectorizacion={activeTab === 'vectorizacion'} class:admin={activeTab === 'admin'}>
   <!-- Header -->
   <header class="header">
@@ -2257,8 +2290,81 @@
     </main>
   {/if}
 </div>
+{/if}
 
 <style>
+  /* ── 404 de fallback de embeds ──────── */
+  .embed-404 {
+    min-height: 100dvh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1.5rem;
+    background: #f0f2f5;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  }
+  .embed-404-card {
+    max-width: 480px;
+    width: 100%;
+    background: #fff;
+    border: 1px solid #e0e0e0;
+    border-radius: 12px;
+    padding: 2rem 1.75rem;
+    box-shadow: 0 4px 18px rgba(0,0,0,0.06);
+    text-align: center;
+    color: #1a1a2e;
+  }
+  .embed-404-code {
+    font-size: 3.5rem;
+    font-weight: 700;
+    color: #c8102e;
+    line-height: 1;
+    margin-bottom: 0.75rem;
+  }
+  .embed-404-card h1 {
+    font-size: 1.15rem;
+    margin-bottom: 0.75rem;
+  }
+  .embed-404-card p {
+    font-size: 0.9rem;
+    color: #4b5563;
+    line-height: 1.5;
+    margin: 0.5rem 0;
+  }
+  .embed-404-path {
+    display: inline-block;
+    background: #f0f2f5;
+    border: 1px solid #e0e0e0;
+    border-radius: 6px;
+    padding: 0.4rem 0.7rem;
+    margin: 0.6rem 0;
+    font-size: 0.8rem;
+    color: #1a1a2e;
+    word-break: break-all;
+  }
+  .embed-404-hint {
+    color: #6b7280 !important;
+    font-size: 0.8rem !important;
+    margin-top: 1rem !important;
+  }
+  .embed-404-link {
+    display: inline-block;
+    margin-top: 1rem;
+    padding: 0.45rem 1rem;
+    background: #5b6abf;
+    color: #fff;
+    text-decoration: none;
+    border-radius: 18px;
+    font-size: 0.85rem;
+    font-weight: 500;
+    box-shadow: 0 2px 8px rgba(91, 106, 191, 0.35);
+    transition: background 0.15s, transform 0.15s;
+  }
+  .embed-404-link:hover {
+    background: #4a59a8;
+    transform: scale(1.02);
+  }
+
   :global(*, *::before, *::after) {
     box-sizing: border-box;
     margin: 0;
