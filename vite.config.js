@@ -24,14 +24,14 @@ export default defineConfig(({ mode }) => {
           rewrite: (path) => path.replace(/^\/api-desarrollo/, ''),
         },
         '/api-staging': {
-          target: 'http://172.10.30.15:8080',
-          changeOrigin: true,
-          rewrite: (path) => path.replace(/^\/api-staging/, ''),
-        },
-        '/api-produccion': {
           target: 'https://mide-chatbot-api.buzzword.com.mx',
           changeOrigin: true,
           secure: true,
+          rewrite: (path) => path.replace(/^\/api-staging/, ''),
+        },
+        '/api-produccion': {
+          target: 'http://172.10.30.16:8080',
+          changeOrigin: true,
           rewrite: (path) => path.replace(/^\/api-produccion/, ''),
         },
       },

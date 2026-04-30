@@ -2,8 +2,8 @@
   // ─── Config ──────────────────────────────────────────
   const AMBIENTES = {
     desarrollo: { url: 'http://127.0.0.1:8000', proxy: '/api-desarrollo' },
-    staging: { url: 'http://172.10.30.15:8080', proxy: '/api-staging' },
-    producción: { url: 'https://mide-chatbot-api.buzzword.com.mx', proxy: '/api-produccion' },
+    staging: { url: 'https://mide-chatbot-api.buzzword.com.mx', proxy: '/api-staging' },
+    producción: { url: 'http://172.10.30.16:8080', proxy: '/api-produccion' },
   };
 
   const DEFAULT_AMBIENTE = import.meta.env.DEV
