@@ -5,16 +5,11 @@
   const AMBIENTES = {
     desarrollo: { url: 'http://127.0.0.1:8000', proxy: '/api-desarrollo' },
     staging: { url: 'https://mide-chatbot-api.buzzword.com.mx', proxy: '/api-staging' },
-    producción: { url: 'http://172.10.30.16:8080', proxy: '/api-produccion' },
   };
 
-  const DEFAULT_AMBIENTE = import.meta.env.DEV
-    ? 'desarrollo'
-    : import.meta.env.MODE === 'staging'
-    ? 'staging'
-    : 'producción';
+  const DEFAULT_AMBIENTE = import.meta.env.DEV ? 'desarrollo' : 'staging';
 
-  // Leer SOLO el ambiente desde la URL: ?ambiente=producción
+  // Leer SOLO el ambiente desde la URL: ?ambiente=staging
   const params = new URLSearchParams(window.location.search);
   const ambienteParam = params.get('ambiente') || DEFAULT_AMBIENTE;
 

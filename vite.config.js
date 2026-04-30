@@ -29,11 +29,6 @@ export default defineConfig(({ mode }) => {
           secure: true,
           rewrite: (path) => path.replace(/^\/api-staging/, ''),
         },
-        '/api-produccion': {
-          target: 'http://172.10.30.16:8080',
-          changeOrigin: true,
-          rewrite: (path) => path.replace(/^\/api-produccion/, ''),
-        },
       },
     },
   };

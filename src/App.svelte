@@ -74,15 +74,10 @@
   const AMBIENTES = {
     desarrollo: { url: 'http://127.0.0.1:8000', proxy: '/api-desarrollo', frontend: 'http://localhost:5173' },
     staging: { url: 'https://mide-chatbot-api.buzzword.com.mx', proxy: '/api-staging', frontend: 'https://mide-chatbot.buzzword.com.mx' },
-    producción: { url: 'http://172.10.30.16:8080', proxy: '/api-produccion', frontend: 'http://172.10.30.16:4173' },
   };
 
   // Determina el ambiente por defecto según build mode
-  const DEFAULT_AMBIENTE = import.meta.env.DEV
-    ? 'desarrollo'
-    : import.meta.env.MODE === 'staging'
-    ? 'staging'
-    : 'producción';
+  const DEFAULT_AMBIENTE = import.meta.env.DEV ? 'desarrollo' : 'staging';
 
   // Estado reactivo del ambiente seleccionado (recupera del localStorage)
   let ambienteSeleccionado = $state(
