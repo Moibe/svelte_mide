@@ -74,7 +74,7 @@
   const AMBIENTES = {
     desarrollo: { url: 'http://127.0.0.1:8000', proxy: '/api-desarrollo', frontend: 'http://localhost:5173' },
     staging: { url: 'http://172.10.30.15:8080', proxy: '/api-staging', frontend: 'http://172.10.30.15:4173' },
-    producción: { url: 'http://172.10.30.16:8080', proxy: '/api-produccion', frontend: 'http://172.10.30.16:4173' },
+    producción: { url: 'https://mide-chatbot-api.buzzword.com.mx', proxy: '/api-produccion', frontend: 'https://mide-chatbot.buzzword.com.mx' },
   };
 
   // Determina el ambiente por defecto según build mode

@@ -5,7 +5,7 @@
   const AMBIENTES = {
     desarrollo: { url: 'http://127.0.0.1:8000', proxy: '/api-desarrollo' },
     staging: { url: 'http://172.10.30.15:8080', proxy: '/api-staging' },
-    producción: { url: 'http://172.10.30.16:8080', proxy: '/api-produccion' },
+    producción: { url: 'https://mide-chatbot-api.buzzword.com.mx', proxy: '/api-produccion' },
   };
 
   const DEFAULT_AMBIENTE = import.meta.env.DEV
@@ -185,9 +185,7 @@
   <!-- Mini header -->
   <header class="embed-header">
     <div class="embed-avatar">
-      <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zM8 17.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5zM9.5 8c0-1.38 1.12-2.5 2.5-2.5s2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5S9.5 9.38 9.5 8zm6.5 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z" fill="white"/>
-      </svg>
+      <span class="material-symbols-outlined">smart_toy</span>
     </div>
     <div class="embed-header-info">
       <span class="embed-title">Asistente MIDE</span>
@@ -208,9 +206,7 @@
         <div class="message-row {msg.role}" class:error={msg.isError}>
           {#if msg.role === 'bot'}
             <div class="bot-avatar">
-              <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zM8 17.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5zM9.5 8c0-1.38 1.12-2.5 2.5-2.5s2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5S9.5 9.38 9.5 8zm6.5 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z" fill="currentColor"/>
-              </svg>
+              <span class="material-symbols-outlined">smart_toy</span>
             </div>
           {/if}
           <div class="bubble-wrap">
@@ -322,10 +318,10 @@
     flex-shrink: 0;
   }
 
-  .embed-avatar svg {
-    width: 20px;
-    height: 20px;
-    fill: white;
+  .embed-avatar .material-symbols-outlined {
+    font-size: 22px;
+    color: #fff;
+    font-variation-settings: 'FILL' 1, 'wght' 500, 'GRAD' 0, 'opsz' 24;
   }
 
   .embed-header-info {
@@ -401,9 +397,10 @@
     color: #fff;
   }
 
-  .bot-avatar svg {
-    width: 15px;
-    height: 15px;
+  .bot-avatar .material-symbols-outlined {
+    font-size: 17px;
+    color: #fff;
+    font-variation-settings: 'FILL' 1, 'wght' 500, 'GRAD' 0, 'opsz' 20;
   }
 
   .bubble-wrap {
