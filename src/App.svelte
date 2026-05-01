@@ -34,7 +34,7 @@
     const entry = {
       fecha: new Date().toISOString(),
       sesion: SESSION_ID,
-      ambiente: ambienteSeleccionado,
+      ambiente: AMBIENTE_LABEL,
       modelo,
       contexto: contextoSeleccionado,
       pregunta,
@@ -71,56 +71,30 @@
     return entry;
   }
 
-  const AMBIENTES = {
-    desarrollo: { url: 'http://127.0.0.1:8000', proxy: '/api-desarrollo', frontend: 'http://localhost:5173' },
-    staging: { url: 'https://mide-chatbot-api.buzzword.com.mx', proxy: '/api-staging', frontend: 'https://mide-chatbot.buzzword.com.mx' },
+  // El ambiente se determina por el hostname donde corre el frontend.
+  // Cada despliegue queda atado a un único API. Sin selector multi-ambiente.
+  const HOSTNAME_TO_API = {
+    'mide-chatbot.buzzword.com.mx': 'https://mide-chatbot-api.buzzword.com.mx',
+    // Producción — ajustar cuando infra confirme el dominio del API:
+    'mide.org.mx': 'https://api.mide.org.mx',
   };
 
-  // Determina el ambiente por defecto según build mode
-  const DEFAULT_AMBIENTE = import.meta.env.DEV ? 'desarrollo' : 'staging';
+  const AMBIENTE_LABEL = (() => {
+    if (import.meta.env.DEV) return 'desarrollo';
+    const host = typeof window !== 'undefined' ? window.location.hostname : '';
+    if (host === 'mide-chatbot.buzzword.com.mx') return 'staging';
+    if (host === 'mide.org.mx') return 'producción';
+    return host || 'desconocido';
+  })();
 
-  // Estado reactivo del ambiente seleccionado (recupera del localStorage)
-  let ambienteSeleccionado = $state(
-    typeof localStorage !== 'undefined'
-      ? localStorage.getItem('mide_ambiente') || DEFAULT_AMBIENTE
-      : DEFAULT_AMBIENTE
-  );
-
-  // Resuelve API_BASE y API_URL_REAL dinámicamente según ambienteSeleccionado
-  let apiUrl = $derived.by(() => {
-    const config = AMBIENTES[ambienteSeleccionado];
-    return {
-      real: config.url,
-      base: import.meta.env.DEV ? config.proxy : config.url,
-    };
-  });
-
-  // Función para cambiar ambiente — recarga contextos al cambiar
-  function cambiarAmbiente(nuevoAmbiente) {
-    if (ambienteSeleccionado !== nuevoAmbiente) {
-      modelosEmbedding = []; // Limpiamos caché de modelos
-      nuevoContextoEmbedding = '';
-      // Limpia mensajes/estado del panel admin para evitar residuos del ambiente anterior
-      mensajeCrearContexto = '';
-      mensajeBorrarContexto = '';
-      mensajeIntegrarDocumento = '';
-      mensajeBorrarDocumento = '';
-      errorVectorizacionContextos = '';
-      contextoABorrar = '';
-      documentoSeleccionadoParaBorrar = '';
-      mostrarConfirmacionBorrar = false;
-      mostrarConfirmacionBorrarDocumento = false;
+  const apiUrl = (() => {
+    if (import.meta.env.DEV) {
+      return { real: 'http://127.0.0.1:8000', base: '/api' };
     }
-    ambienteSeleccionado = nuevoAmbiente;
-    localStorage.setItem('mide_ambiente', nuevoAmbiente);
-    console.log(`🔄 Ambiente cambiado a: ${nuevoAmbiente}`);
-    console.log(`📍 API URL: ${apiUrl.real}/chatbot`);
-    cargarContextos();
-    if (activeTab === 'vectorizacion') {
-      cargarContextosVectorizacion();
-    }
-    verificarSalud();
-  }
+    const host = typeof window !== 'undefined' ? window.location.hostname : '';
+    const real = HOSTNAME_TO_API[host] ?? (typeof window !== 'undefined' ? window.location.origin : '');
+    return { real, base: real };
+  })();
 
   // Exponer helpers de log en consola para depuración
   if (typeof window !== 'undefined') {
@@ -131,7 +105,7 @@
   $effect(() => {
     console.groupCollapsed('%c🌐 MIDE Chat — Configuración', 'color:#c8102e;font-weight:bold;font-size:13px');
     console.log('Sesión     :', SESSION_ID);
-    console.log('Ambiente   :', ambienteSeleccionado);
+    console.log('Ambiente   :', AMBIENTE_LABEL);
     console.log('API URL    :', apiUrl.real);
     console.log('Endpoint   :', `${apiUrl.real}/chatbot`);
     console.groupEnd();
@@ -176,7 +150,7 @@
   let isLoading = $state(false);
   let chatContainer = $state(null);
   let activeTab = $state('vectorizacion');
-  let vectorizacionTab = $state('contextos');
+  let vectorizacionTab = $state('receta');
   let adminTab = $state('modelos');
   let defaultContextGuardado = $state(
     typeof localStorage !== 'undefined' ? (localStorage.getItem('mide_default_context') || '') : ''
@@ -195,7 +169,6 @@
 
   // Lightbot config (defaults para embed) — persistidos en backend por ambiente
   const LIGHTBOT_DEFAULTS_FALLBACK = { contexto: '', modelo: 'mistral', historial: 3 };
-  let lightbotAmbiente = $state('staging');
   let lightbotContexto = $state(LIGHTBOT_DEFAULTS_FALLBACK.contexto);
   let lightbotModelo = $state(LIGHTBOT_DEFAULTS_FALLBACK.modelo);
   let lightbotHistorial = $state(LIGHTBOT_DEFAULTS_FALLBACK.historial);
@@ -263,7 +236,6 @@
 
   // ContextLight config (defaults para embed) — persistidos en backend por ambiente
   const CONTEXTLIGHT_DEFAULTS_FALLBACK = { contexto: '' };
-  let contextlightAmbiente = $state('staging');
   let contextlightContexto = $state(CONTEXTLIGHT_DEFAULTS_FALLBACK.contexto);
   let contextlightGuardado = $state({ ...CONTEXTLIGHT_DEFAULTS_FALLBACK });
   let contextlightGuardadoFlash = $state(false);
@@ -317,22 +289,10 @@
     return contextlightContexto === contextlightGuardado.contexto;
   }
 
-  // Sincronizar lightbotAmbiente con el ambiente seleccionado en el navbar
+  // Cargar config al montar
   $effect(() => {
-    lightbotAmbiente = ambienteSeleccionado;
-  });
-
-  // Sincronizar contextlightAmbiente con el ambiente seleccionado en el navbar
-  $effect(() => {
-    contextlightAmbiente = ambienteSeleccionado;
-  });
-
-  // Cargar config del ambiente activo (al montar y cuando el ambiente cambia)
-  $effect(() => {
-    if (ambienteSeleccionado) {
-      cargarLightbotDefaults();
-      cargarContextlightDefaults();
-    }
+    cargarLightbotDefaults();
+    cargarContextlightDefaults();
   });
 
   let vectorizacionContextos = $state([]);
@@ -469,10 +429,10 @@
           console.log('%c🔄 API regresó online — recargando contextos', 'color:#16a34a;font-weight:bold');
           cargarContextos();
         } else if (estadoPrevio === 'checking' && import.meta.env.PROD) {
-          console.log(`%c✅ API online [${ambienteSeleccionado}] → ${apiUrl.real}`, 'color:#16a34a;font-weight:bold');
+          console.log(`%c✅ API online [${AMBIENTE_LABEL}] → ${apiUrl.real}`, 'color:#16a34a;font-weight:bold');
         }
       } else {
-        console.warn(`%c⚠️ API respondió pero status != ok [${ambienteSeleccionado}] → ${apiUrl.real}`, 'color:#d97706;font-weight:bold', data);
+        console.warn(`%c⚠️ API respondió pero status != ok [${AMBIENTE_LABEL}] → ${apiUrl.real}`, 'color:#d97706;font-weight:bold', data);
       }
       ultimaVerificacion = new Date();
     } catch (err) {
@@ -482,12 +442,12 @@
       const label = err.name === 'AbortError' ? 'Timeout (>5s)' : err.message;
       if (wasOnline) {
         console.error(
-          `%c🔴 API caída [${ambienteSeleccionado}] → ${apiUrl.real}\n   Motivo: ${label}\n   Hora: ${new Date().toLocaleTimeString()}`,
+          `%c🔴 API caída [${AMBIENTE_LABEL}] → ${apiUrl.real}\n   Motivo: ${label}\n   Hora: ${new Date().toLocaleTimeString()}`,
           'color:#dc2626;font-weight:bold'
         );
       } else if (estadoPrevio === 'checking') {
         console.warn(
-          `%c⚠️ API no disponible [${ambienteSeleccionado}] → ${apiUrl.real}\n   Motivo: ${label}`,
+          `%c⚠️ API no disponible [${AMBIENTE_LABEL}] → ${apiUrl.real}\n   Motivo: ${label}`,
           'color:#d97706;font-weight:bold'
         );
       }
@@ -527,7 +487,7 @@
         errorModelos = '⏳ La API no respondió (tiempo de espera agotado). Intenta recargar en unos momentos.';
         console.warn('%c⏳ Timeout al cargar modelos', 'color:orange;font-weight:bold');
       } else {
-        errorModelos = `API ${ambienteSeleccionado.charAt(0).toUpperCase() + ambienteSeleccionado.slice(1)} offline`;
+        errorModelos = `API ${AMBIENTE_LABEL.charAt(0).toUpperCase() + AMBIENTE_LABEL.slice(1)} offline`;
         console.error('%c❌ Error al cargar modelos', 'color:red;font-weight:bold', err);
       }
     } finally {
@@ -615,8 +575,8 @@
     modelosEmbedding = [];
     try {
       // Reuse cache for current environment if available
-      if (cacheModelosEmbedding[ambienteSeleccionado]?.length) {
-        modelosEmbedding = cacheModelosEmbedding[ambienteSeleccionado];
+      if (cacheModelosEmbedding[AMBIENTE_LABEL]?.length) {
+        modelosEmbedding = cacheModelosEmbedding[AMBIENTE_LABEL];
         if (modelosEmbedding.length > 0 && !nuevoContextoEmbedding) {
           const preferido = seleccionarModeloDefault(modelosEmbedding);
           nuevoContextoEmbedding = preferido;
@@ -687,7 +647,7 @@
         ...MODELOS_EMBEDDING_OPENAI.filter(m => !modelosConfirmados.includes(m))
       ];
       modelosEmbedding = todosLosModelos;
-      cacheModelosEmbedding[ambienteSeleccionado] = modelosEmbedding;
+      cacheModelosEmbedding[AMBIENTE_LABEL] = modelosEmbedding;
       // Seleccionar por defecto uno si hay y no hay seleccion
       if (modelosEmbedding.length > 0 && !nuevoContextoEmbedding) {
         const preferido = seleccionarModeloDefault(modelosEmbedding);
@@ -740,7 +700,7 @@
         errorVectorizacionContextos = '⏳ La API no respondió (tiempo de espera agotado). Puede estar ocupada procesando un documento. Intenta recargar en unos momentos.';
         console.warn('%c⏳ Timeout al cargar contextos admin — la API puede estar ocupada', 'color:orange;font-weight:bold');
       } else {
-        errorVectorizacionContextos = `API ${ambienteSeleccionado.charAt(0).toUpperCase() + ambienteSeleccionado.slice(1)} offline`;
+        errorVectorizacionContextos = `API ${AMBIENTE_LABEL.charAt(0).toUpperCase() + AMBIENTE_LABEL.slice(1)} offline`;
         console.error('%c❌ Error al cargar contextos admin', 'color:red;font-weight:bold', err);
       }
     } finally {
@@ -806,7 +766,7 @@
       console.log('Respuesta   :', data);
       console.groupEnd();
 
-      mensajeCrearContexto = `✅ ${data.Mensaje ?? `Contexto "${nuevoContextoNombre}" creado exitosamente`}`;
+      mensajeCrearContexto = `✅ ${data.Mensaje ?? `Base de Conocimiento "${nuevoContextoNombre}" creada exitosamente`}`;
       nuevoContextoNombre = '';
       nuevoContextoEmbedding = '';
       nuevoContextoChunkSize = '1500';
@@ -824,9 +784,291 @@
     }
   }
 
+  // ─── Receta: crear base + asignar como default del Chatbot en una sola operación ──
+  let recetaCargando = $state(false);
+  let recetaMensaje = $state('');
+  let recetaError = $state('');
+
+  async function ejecutarReceta() {
+    if (!nuevoContextoEmbedding.trim()) {
+      recetaError = '❌ Selecciona un modelo de embedding';
+      return;
+    }
+    const chunkSizeNum = parseInt(nuevoContextoChunkSize, 10);
+    if (isNaN(chunkSizeNum) || chunkSizeNum < 1) {
+      recetaError = '❌ La medida del embedding debe ser un número válido mayor a 0';
+      return;
+    }
+    if (!lightbotModelo) {
+      recetaError = '❌ Selecciona un modelo LLM';
+      return;
+    }
+
+    recetaCargando = true;
+    recetaError = '';
+    recetaMensaje = '';
+
+    const nombreContexto = nombreContextoGenerado;
+
+    try {
+      // Paso 1: Crear la base de conocimiento
+      const nombre = encodeURIComponent(nombreContexto);
+      const modeloEmb = encodeURIComponent(nuevoContextoEmbedding.trim());
+      const chunk = encodeURIComponent(chunkSizeNum);
+      const urlCrear = `${apiUrl.base}/crearContexto?nombre_contexto=${nombre}&embedding_model=${modeloEmb}&chunk_size=${chunk}`;
+
+      console.groupCollapsed('%c✨ Receta — paso 1/3: crear base', 'color:#a855f7;font-weight:bold');
+      console.log('URL:', `${apiUrl.real}/crearContexto`);
+      console.log('Params:', { nombre_contexto: nombreContexto, embedding_model: modeloEmb, chunk_size: chunkSizeNum });
+      console.groupEnd();
+
+      const resCrear = await fetch(urlCrear, { method: 'POST' });
+      if (!resCrear.ok) {
+        const txt = await resCrear.text().catch(() => '(sin detalles)');
+        let detail = txt;
+        try {
+          const j = JSON.parse(txt);
+          detail = typeof j.detail === 'string' ? j.detail : (j.detail ? JSON.stringify(j.detail) : detail);
+        } catch (_) {}
+        throw new Error(`No se pudo crear la base: ${detail}`);
+      }
+
+      // Paso 2: Asignar como default del Chatbot
+      const snap = { contexto: nombreContexto, modelo: lightbotModelo, historial: lightbotHistorial };
+
+      console.groupCollapsed('%c✨ Receta — paso 2/3: asignar al Chatbot', 'color:#a855f7;font-weight:bold');
+      console.log('URL:', `${apiUrl.real}/configLightbot`);
+      console.log('Body:', snap);
+      console.groupEnd();
+
+      const resCfg = await fetch(`${apiUrl.base}/configLightbot`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(snap),
+      });
+      if (!resCfg.ok) {
+        throw new Error(`Base creada pero no se pudo asignar al Chatbot: HTTP ${resCfg.status}`);
+      }
+
+      // Paso 3: Asignar como default del Admin
+      const snapAdmin = { contexto: nombreContexto };
+
+      console.groupCollapsed('%c✨ Receta — paso 3/3: asignar al Admin', 'color:#a855f7;font-weight:bold');
+      console.log('URL:', `${apiUrl.real}/configContextlight`);
+      console.log('Body:', snapAdmin);
+      console.groupEnd();
+
+      const resAdmin = await fetch(`${apiUrl.base}/configContextlight`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(snapAdmin),
+      });
+      if (!resAdmin.ok) {
+        throw new Error(`Base creada y asignada al Chatbot, pero no se pudo asignar al Admin: HTTP ${resAdmin.status}`);
+      }
+
+      // Refrescar estado local
+      lightbotGuardado = snap;
+      lightbotContexto = nombreContexto;
+      contextlightGuardado = snapAdmin;
+      contextlightContexto = nombreContexto;
+      recetaMensaje = `✅ Receta lista: "${nombreContexto}" creada y asignada al Chatbot y al Admin.`;
+
+      setTimeout(() => {
+        cargarContextosVectorizacion();
+        cargarLightbotDefaults();
+        cargarContextlightDefaults();
+      }, 800);
+    } catch (err) {
+      console.error('%c❌ Error en receta', 'color:red;font-weight:bold', err);
+      recetaError = `❌ ${err.message}`;
+    } finally {
+      recetaCargando = false;
+    }
+  }
+
+  // Guardar: descarga un archivo JSON con la receta actual del formulario.
+  // El archivo se puede cargar después desde Administración › Cargar Receta.
+  function guardarReceta() {
+    if (!nuevoContextoEmbedding.trim()) {
+      recetaError = '❌ Selecciona un modelo de embedding';
+      return;
+    }
+    if (!lightbotModelo) {
+      recetaError = '❌ Selecciona un modelo LLM';
+      return;
+    }
+
+    const receta = {
+      version: 1,
+      tipo: 'mide-receta',
+      nombre: nombreContextoGenerado,
+      embedding_model: nuevoContextoEmbedding.trim(),
+      chunk_size: parseInt(nuevoContextoChunkSize, 10) || 1500,
+      modelo_llm: lightbotModelo,
+      historial: lightbotHistorial,
+      generado: new Date().toISOString(),
+    };
+
+    try {
+      const blob = new Blob([JSON.stringify(receta, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `receta-${nombreContextoGenerado}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      recetaError = '';
+      recetaMensaje = `✅ Receta descargada: receta-${nombreContextoGenerado}.json`;
+    } catch (err) {
+      recetaError = `❌ No se pudo guardar la receta: ${err.message}`;
+    }
+  }
+
+  // ─── Cargar Receta: lee un JSON y pre-llena el formulario de Receta ───
+  let cargarRecetaError = $state('');
+  let cargarRecetaMensaje = $state('');
+  let recetaPendiente = $state(null); // { nombre, advertencias: [] } cuando hay validaciones que confirmar
+
+  // Verifica que la receta sea ejecutable en el ambiente actual:
+  //  · que los modelos (embedding y LLM) estén disponibles
+  //  · que el nombre de la base de conocimiento no exista ya
+  // Devuelve un array de advertencias (vacío si todo OK).
+  async function validarRecetaModelos(data) {
+    const advertencias = [];
+
+    // 1) Validar modelos
+    try {
+      const res = await fetch(`${apiUrl.base}/listarModelos`);
+      if (!res.ok) {
+        advertencias.push('No se pudo consultar la lista de modelos del API para validar.');
+      } else {
+        const json = await res.json();
+        let lista = [];
+        if (Array.isArray(json)) lista = json;
+        else if (json.modelos && Array.isArray(json.modelos)) lista = json.modelos;
+
+        const embed = data.embedding_model;
+        const llm = data.modelo_llm;
+
+        const embedEnOllama = lista.includes(embed);
+        const embedEnOpenAI = MODELOS_EMBEDDING_OPENAI.includes(embed);
+        if (!embedEnOllama && !embedEnOpenAI) {
+          advertencias.push(`El modelo de embedding "${embed}" no está disponible en este ambiente (ni en Ollama ni en OpenAI).`);
+        }
+
+        const llmEnOllama = lista.includes(llm);
+        const llmEnOpenAI = MODELOS_OPENAI.includes(llm);
+        if (!llmEnOllama && !llmEnOpenAI) {
+          advertencias.push(`El modelo LLM "${llm}" no está disponible en este ambiente (ni en Ollama ni en OpenAI).`);
+        }
+      }
+    } catch (err) {
+      advertencias.push(`No se pudo validar los modelos contra el API: ${err.message}`);
+    }
+
+    // 2) Validar que la base de conocimiento no exista ya
+    try {
+      const nombre = nombreContextoGenerado || data.nombre;
+      if (nombre) {
+        const res = await fetch(`${apiUrl.base}/listarContextos`);
+        if (!res.ok) {
+          advertencias.push('No se pudo consultar la lista de bases de conocimiento para validar.');
+        } else {
+          const json = await res.json();
+          let nombres = [];
+          if (json['Contextos existentes para este chatbot']) {
+            nombres = Object.keys(json['Contextos existentes para este chatbot']);
+          } else if (Array.isArray(json)) {
+            nombres = json;
+          } else if (json.contextos && typeof json.contextos === 'object') {
+            nombres = Array.isArray(json.contextos) ? json.contextos : Object.keys(json.contextos);
+          }
+          if (nombres.includes(nombre)) {
+            advertencias.push(`La base de conocimiento "${nombre}" ya existe en este ambiente. Crearla otra vez fallará.`);
+          }
+        }
+      }
+    } catch (err) {
+      advertencias.push(`No se pudo validar la base de conocimiento contra el API: ${err.message}`);
+    }
+
+    return advertencias;
+  }
+
+  // Ejecuta ejecutarReceta() y refleja su resultado en el panel de Cargar Receta.
+  async function ejecutarYReflejar() {
+    cargarRecetaMensaje = '⟳ Ejecutando receta...';
+    cargarRecetaError = '';
+    await ejecutarReceta();
+    if (recetaError) {
+      cargarRecetaError = recetaError;
+      cargarRecetaMensaje = '';
+    } else if (recetaMensaje) {
+      cargarRecetaMensaje = recetaMensaje;
+      cargarRecetaError = '';
+    }
+  }
+
+  function cargarRecetaDesdeArchivo(file) {
+    cargarRecetaError = '';
+    cargarRecetaMensaje = '';
+    recetaPendiente = null;
+    if (!file) {
+      cargarRecetaError = '❌ Selecciona un archivo de receta';
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      try {
+        const texto = String(e.target?.result ?? '');
+        const data = JSON.parse(texto);
+        if (data?.tipo !== 'mide-receta') {
+          cargarRecetaError = '❌ El archivo no parece una receta válida (falta tipo "mide-receta").';
+          return;
+        }
+        // Pre-llenar formulario
+        nuevoContextoEmbedding = data.embedding_model ?? '';
+        nuevoContextoChunkSize = String(data.chunk_size ?? '1500');
+        lightbotModelo = data.modelo_llm ?? 'mistral';
+        lightbotHistorial = typeof data.historial === 'number' ? data.historial : 3;
+
+        cargarRecetaMensaje = `⟳ Receta "${data.nombre ?? 'sin nombre'}" cargada. Verificando modelos...`;
+
+        const advertencias = await validarRecetaModelos(data);
+        if (advertencias.length > 0) {
+          recetaPendiente = { nombre: data.nombre ?? 'sin nombre', advertencias };
+          cargarRecetaMensaje = '';
+          return;
+        }
+
+        await ejecutarYReflejar();
+      } catch (err) {
+        cargarRecetaError = `❌ No se pudo leer la receta: ${err.message}`;
+      }
+    };
+    reader.onerror = () => {
+      cargarRecetaError = '❌ No se pudo leer el archivo.';
+    };
+    reader.readAsText(file);
+  }
+
+  async function forzarEjecutarReceta() {
+    recetaPendiente = null;
+    await ejecutarYReflejar();
+  }
+
+  function cancelarRecetaPendiente() {
+    recetaPendiente = null;
+    cargarRecetaMensaje = '';
+    cargarRecetaError = '';
+  }
+
   async function borrarContextoConfirmado() {
     if (!contextoABorrar.trim()) {
-      mensajeBorrarContexto = '❌ Selecciona un contexto para borrar';
+      mensajeBorrarContexto = '❌ Selecciona una base de conocimiento para borrar';
       return;
     }
 
@@ -856,7 +1098,7 @@
       console.log('Respuesta   :', data);
       console.groupEnd();
 
-      mensajeBorrarContexto = `✅ ${data.Mensaje ?? `Contexto "${contextoABorrar}" borrado exitosamente`}`;
+      mensajeBorrarContexto = `✅ ${data.Mensaje ?? `Base de Conocimiento "${contextoABorrar}" borrada exitosamente`}`;
       contextoABorrar = '';
       mostrarConfirmacionBorrar = false;
 
@@ -875,7 +1117,7 @@
 
   async function cargarDocumentosVectorizacion(contexto) {
     if (!contexto.trim()) {
-      mensajeIntegrarDocumento = '❌ Selecciona un contexto primero';
+      mensajeIntegrarDocumento = '❌ Selecciona una base de conocimiento primero';
       return;
     }
 
@@ -898,7 +1140,7 @@
 
   async function integrarDocumento() {
     if (!contextoSeleccionadoParaDocumentos.trim()) {
-      mensajeIntegrarDocumento = '❌ Selecciona un contexto';
+      mensajeIntegrarDocumento = '❌ Selecciona una base de conocimiento';
       return;
     }
     if (!archivoParaIntegrar) {
@@ -1105,7 +1347,7 @@
 
       console.groupCollapsed(`%c📤 POST /chatbot`, 'color:#c8102e;font-weight:bold;font-size:12px');
       console.log('URL enviada :', `${apiUrl.real}/chatbot`);
-      console.log('Ambiente    :', ambienteSeleccionado);
+      console.log('Ambiente    :', AMBIENTE_LABEL);
       console.log('Payload     :', JSON.parse(JSON.stringify(payload)));
       console.log('Body JSON   :', JSON.stringify(payload, null, 2));
       console.groupEnd();
@@ -1225,11 +1467,9 @@
   <header class="header">
     <div class="header-left">
       <div class="avatar">
-        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zM8 17.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5zM9.5 8c0-1.38 1.12-2.5 2.5-2.5s2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5S9.5 9.38 9.5 8zm6.5 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z" fill="white"/>
-        </svg>
+        <span class="material-symbols-outlined avatar-icon">universal_currency_alt</span>
       </div>
-      <div class="header-info">
+      <div class="header-info" style="flex-direction: row; align-items: baseline; gap: 0.75rem; flex-wrap: wrap;">
         <h1 class="header-title">Asistente MIDE</h1>
         <span class="header-status" onclick={verificarSalud} onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && verificarSalud()} title="Click para verificar conexión" role="button" tabindex="0">
           <span class="status-dot" class:online={estadoSalud === 'online'} class:offline={estadoSalud === 'offline'} class:checking={estadoSalud === 'checking'}></span>
@@ -1242,16 +1482,6 @@
           {/if}
         </span>
       </div>
-      <div class="ambiente-toggle">
-        {#each Object.keys(AMBIENTES) as amb}
-          <button
-            class="ambiente-btn"
-            class:active={ambienteSeleccionado === amb}
-            onclick={() => cambiarAmbiente(amb)}
-            aria-pressed={ambienteSeleccionado === amb}
-          >{amb}</button>
-        {/each}
-      </div>
     </div>
 
     <div class="tabs-toggle">
@@ -1260,20 +1490,14 @@
         class:active={activeTab === 'vectorizacion'}
         onclick={() => { activeTab = 'vectorizacion'; verificarSalud(); }}
         aria-pressed={activeTab === 'vectorizacion'}
-      >🛠️ Construcción</button>
-      <button
-        class="tab-btn"
-        class:active={activeTab === 'chat'}
-        onclick={() => { activeTab = 'chat'; cargarContextos(); verificarSalud(); }}
-        aria-pressed={activeTab === 'chat'}
-      >💬 Chatbot</button>
+      ><span class="material-symbols-outlined tab-icon">widgets</span> Embebidos</button>
       <button
         class="tab-btn admin-gear-btn"
         class:active={activeTab === 'admin'}
         onclick={() => { activeTab = 'admin'; cargarModelos(); cargarModelosEmbedding(); }}
         aria-pressed={activeTab === 'admin'}
         title="Administración"
-      >⚙️</button>
+      ><span class="material-symbols-outlined admin-gear-icon">settings</span> Configuración</button>
     </div>
   </header>
 
@@ -1281,7 +1505,7 @@
   {#if activeTab === 'chat'}
   <nav class="chat-subnav">
     <div class="context-select-wrap">
-      <label for="ctx-select">Contexto</label>
+      <label for="ctx-select">Base de Conocimiento</label>
       {#if cargandoContextos}
         <span class="ctx-loading">cargando...</span>
       {:else if contextos.length === 0}
@@ -1415,7 +1639,7 @@
             <div class="banner-integracion-icon">⏳</div>
             <div class="banner-integracion-text">
               <strong>Integración en curso</strong>
-              <p>El documento <strong>"{integracionEnCurso.archivo}"</strong> se está procesando en el contexto <strong>"{integracionEnCurso.contexto}"</strong>. La API puede tardar en responder a otras peticiones.</p>
+              <p>El documento <strong>"{integracionEnCurso.archivo}"</strong> se está procesando en la base de conocimiento <strong>"{integracionEnCurso.contexto}"</strong>. La API puede tardar en responder a otras peticiones.</p>
               <button class="banner-dismiss-btn" onclick={() => { localStorage.removeItem('mide_integracion_pendiente'); integracionEnCurso = null; }}>✕ Descartar</button>
             </div>
           </div>
@@ -1432,49 +1656,24 @@
         <div class="vectorizacion-subtabs">
           <button
             class="vectorizacion-subtab-btn"
-            class:active={vectorizacionTab === 'contextos'}
-            onclick={() => { vectorizacionTab = 'contextos'; vinoDeEditarContexto = false; }}
+            class:active={vectorizacionTab === 'receta'}
+            onclick={() => { vectorizacionTab = 'receta'; cargarModelosEmbedding(); }}
           >
-            📂 Contextos
-          </button>
-          {#if vinoDeEditarContexto}
-            <span class="subtab-arrow-indicator" aria-hidden="true">»</span>
-          {/if}
-          <button
-            class="vectorizacion-subtab-btn"
-            class:active={vectorizacionTab === 'documentos'}
-            disabled
-            title="Accede desde el ✏️ de un contexto"
-          >
-            📄 Documentos
-          </button>
-          <button
-            class="vectorizacion-subtab-btn"
-            class:active={vectorizacionTab === 'lightbot'}
-            onclick={() => { vectorizacionTab = 'lightbot'; cargarContextos(); }}
-          >
-            💬 LightbotEmbedder
+            <span class="material-symbols-outlined subtab-icon">restaurant_menu</span> Receta
           </button>
           <button
             class="vectorizacion-subtab-btn"
             class:active={vectorizacionTab === 'lightbotpanel'}
             onclick={() => { vectorizacionTab = 'lightbotpanel'; }}
           >
-            🤖 LightBot
-          </button>
-          <button
-            class="vectorizacion-subtab-btn"
-            class:active={vectorizacionTab === 'contextlightembedder'}
-            onclick={() => { vectorizacionTab = 'contextlightembedder'; cargarContextos(); }}
-          >
-            📦 ContextLightEmbedder
+            <span class="material-symbols-outlined subtab-icon">smart_toy</span> Chatbot
           </button>
           <button
             class="vectorizacion-subtab-btn"
             class:active={vectorizacionTab === 'contextlight'}
             onclick={() => { vectorizacionTab = 'contextlight'; }}
           >
-            🪶 ContextLight
+            <span class="material-symbols-outlined subtab-icon">dashboard_2_gear</span> Admin
           </button>
         </div>
 
@@ -1483,12 +1682,12 @@
         {#if vectorizacionTab === 'contextos'}
           <div class="crear-contexto-wrap" class:abierto={crearContextoAbierto}>
             <button class="crear-contexto-toggle" onclick={() => crearContextoAbierto = !crearContextoAbierto}>
-              <h3>➕ Crear Nuevo Contexto</h3>
+              <h3>➕ Crear Nueva Base de Conocimiento</h3>
             </button>
             {#if crearContextoAbierto}
             <div class="crear-contexto-form">
               <div class="form-field">
-                <label for="contexto-nombre">Nombre del Contexto</label>
+                <label for="contexto-nombre">Nombre de la Base de Conocimiento</label>
                 <input
                   id="contexto-nombre"
                   type="text"
@@ -1556,29 +1755,39 @@
             </div>
             {#if mensajeCrearContexto}
               <p class="mensaje-contexto" class:success={mensajeCrearContexto.includes('✅')}>
-                {mensajeCrearContexto}
+                {#if mensajeCrearContexto.startsWith('✅')}
+                  <span class="material-symbols-outlined success-icon">check_circle</span>
+                  {mensajeCrearContexto.replace(/^✅\s*/, '')}
+                {:else}
+                  {mensajeCrearContexto}
+                {/if}
               </p>
             {/if}
             {/if}
           </div>
 
           {#if mensajeBorrarContexto}
-            <p class="mensaje-contexto" class:success={mensajeBorrarContexto.includes('✅')} style="margin-top: 0.5rem;">
-              {mensajeBorrarContexto}
+            <p class="mensaje-contexto" class:success={mensajeBorrarContexto.includes('✅')} style="margin-top: 0.5rem; margin-bottom: 1.25rem;">
+              {#if mensajeBorrarContexto.startsWith('✅')}
+                <span class="material-symbols-outlined success-icon">check_circle</span>
+                {mensajeBorrarContexto.replace(/^✅\s*/, '')}
+              {:else}
+                {mensajeBorrarContexto}
+              {/if}
             </p>
           {/if}
 
           <div class="contextos-table-wrap">
             <div class="seccion-header">
-              <h3>📂 Contextos Existentes</h3>
-              <button onclick={cargarContextosVectorizacion} class="vectorizacion-action-btn contextos-recargar-btn" disabled={cargandoVectorizacionContextos} aria-label="Recargar contextos" title="Recargar contextos">
-                ↻
+              <h3><span class="material-symbols-outlined section-icon-h3">folder</span> Bases de Conocimiento Existentes</h3>
+              <button onclick={cargarContextosVectorizacion} class="vectorizacion-action-btn contextos-recargar-btn" disabled={cargandoVectorizacionContextos} aria-label="Recargar bases de conocimiento" title="Recargar bases de conocimiento">
+                <span class="material-symbols-outlined row-icon">autorenew</span>
               </button>
             </div>
             {#if cargandoVectorizacionContextos}
               <p style="color: rgba(255,255,255,0.6); font-size: 0.9rem; padding: 1rem 0;">⟳ Cargando contextos...</p>
             {:else if vectorizacionContextos.length === 0}
-              <p style="color: rgba(255,255,255,0.6); font-size: 0.9rem; padding: 1rem 0;">No hay contextos disponibles</p>
+              <p style="color: rgba(255,255,255,0.6); font-size: 0.9rem; padding: 1rem 0;">No hay bases de conocimiento disponibles</p>
             {:else}
               <div class="contextos-table">
                 {#each vectorizacionContextos as contexto (contexto.nombre)}
@@ -1586,7 +1795,7 @@
                     <span class="contexto-nombre">{contexto.nombre}</span>
                     <button
                       class="contexto-editar-btn"
-                      title="Editar contexto (ir a Documentos)"
+                      title="Editar base de conocimiento (ir a Documentos)"
                       onclick={() => {
                         contextoSeleccionadoParaDocumentos = contexto.nombre;
                         vinoDeEditarContexto = true;
@@ -1594,15 +1803,15 @@
                         cargarDocumentosVectorizacion(contexto.nombre);
                       }}
                     >
-                      ✏️
+                      <span class="material-symbols-outlined row-icon">edit</span>
                     </button>
                     <button
                       class="contexto-borrar-btn"
-                      title="Borrar contexto"
+                      title="Borrar base de conocimiento"
                       disabled={cargandoBorrarContexto}
                       onclick={() => { contextoABorrar = contexto.nombre; mostrarConfirmacionBorrar = true; }}
                     >
-                      🗑️
+                      <span class="material-symbols-outlined row-icon">delete</span>
                     </button>
                   </div>
                 {/each}
@@ -1623,14 +1832,14 @@
 
             <!-- Selector de contexto -->
             <div class="documentos-contexto-select">
-              <label for="doc-contexto">Selecciona contexto:</label>
+              <label for="doc-contexto">Selecciona base de conocimiento:</label>
               <select
                 id="doc-contexto"
                 bind:value={contextoSeleccionadoParaDocumentos}
                 onchange={() => cargarDocumentosVectorizacion(contextoSeleccionadoParaDocumentos)}
                 class="contexto-select"
               >
-                <option value="">-- Selecciona un contexto --</option>
+                <option value="">-- Selecciona una base de conocimiento --</option>
                 {#each vectorizacionContextos as contexto (contexto.nombre)}
                   <option value={contexto.nombre}>{contexto.nombre}</option>
                 {/each}
@@ -1640,11 +1849,11 @@
             <!-- Lista de documentos -->
             {#if contextoSeleccionadoParaDocumentos}
               <div class="documentos-list-wrap">
-                <h4>Documentos del contexto: <strong>{contextoSeleccionadoParaDocumentos}</strong></h4>
+                <h4>Documentos de la base de conocimiento: <strong>{contextoSeleccionadoParaDocumentos}</strong></h4>
                 {#if cargandoVectorizacionDocumentos}
                   <p style="color: rgba(255,255,255,0.6); font-size: 0.9rem; padding: 1rem 0;">⟳ Cargando documentos...</p>
                 {:else if vectorizacionDocumentos.length === 0}
-                  <p style="color: rgba(255,255,255,0.6); font-size: 0.9rem; padding: 1rem 0;">No hay documentos en este contexto</p>
+                  <p style="color: rgba(255,255,255,0.6); font-size: 0.9rem; padding: 1rem 0;">No hay documentos en esta base de conocimiento</p>
                 {:else}
                   <div class="documentos-table">
                     {#each vectorizacionDocumentos as doc (doc)}
@@ -1656,7 +1865,7 @@
                           disabled={cargandoBorrarDocumento}
                           onclick={() => { documentoSeleccionadoParaBorrar = doc; mostrarConfirmacionBorrarDocumento = true; }}
                         >
-                          🗑️
+                          <span class="material-symbols-outlined row-icon">delete</span>
                         </button>
                       </div>
                     {/each}
@@ -1665,7 +1874,12 @@
               </div>
               {#if mensajeBorrarDocumento}
                 <p class="mensaje-documento" class:success={mensajeBorrarDocumento.includes('✅')} style="margin-top: 0.5rem;">
-                  {mensajeBorrarDocumento}
+                  {#if mensajeBorrarDocumento.startsWith('✅')}
+                    <span class="material-symbols-outlined success-icon">check_circle</span>
+                    {mensajeBorrarDocumento.replace(/^✅\s*/, '')}
+                  {:else}
+                    {mensajeBorrarDocumento}
+                  {/if}
                 </p>
               {/if}
             {/if}
@@ -1676,14 +1890,14 @@
             <h3>📤 Integrar Nuevo Documento</h3>
             <div class="integrar-documento-form">
               <div class="form-field">
-                <label for="doc-contexto-integrar">Contexto destino</label>
+                <label for="doc-contexto-integrar">Base de Conocimiento destino</label>
                 <select
                   id="doc-contexto-integrar"
                   bind:value={contextoSeleccionadoParaDocumentos}
                   disabled={cargandoIntegrarDocumento}
                   class="contexto-select"
                 >
-                  <option value="">-- Selecciona un contexto --</option>
+                  <option value="">-- Selecciona una base de conocimiento --</option>
                   {#each vectorizacionContextos as contexto (contexto.nombre)}
                     <option value={contexto.nombre}>{contexto.nombre}</option>
                   {/each}
@@ -1727,7 +1941,12 @@
 
             {#if mensajeIntegrarDocumento}
               <p class="mensaje-documento" class:success={mensajeIntegrarDocumento.includes('✅')}>
-                {mensajeIntegrarDocumento}
+                {#if mensajeIntegrarDocumento.startsWith('✅')}
+                  <span class="material-symbols-outlined success-icon">check_circle</span>
+                  {mensajeIntegrarDocumento.replace(/^✅\s*/, '')}
+                {:else}
+                  {mensajeIntegrarDocumento}
+                {/if}
               </p>
             {/if}
           </div>
@@ -1739,7 +1958,7 @@
             <div class="modal-content">
               <h3>⚠️ Confirmar Borrado de Documento</h3>
               <p>
-                ¿Estás seguro de que deseas borrar el documento <strong>"{documentoSeleccionadoParaBorrar}"</strong> del contexto <strong>"{contextoSeleccionadoParaDocumentos}"</strong>?
+                ¿Estás seguro de que deseas borrar el documento <strong>"{documentoSeleccionadoParaBorrar}"</strong> de la base de conocimiento <strong>"{contextoSeleccionadoParaDocumentos}"</strong>?
               </p>
               <p style="font-size: 0.85rem; color: rgba(255,255,255,0.6);">
                 Esta acción es irreversible.
@@ -1768,9 +1987,9 @@
         {#if vectorizacionTab === 'modelos'}
           <div class="modelos-wrap">
             <div class="seccion-header">
-              <h3>🤖 Modelos Disponibles</h3>
+              <h3><span class="material-symbols-outlined section-icon-h3">psychology</span> Modelos Disponibles</h3>
               <button onclick={cargarModelos} class="vectorizacion-action-btn" disabled={cargandoModelos}>
-                ↻ Recargar
+                <span class="material-symbols-outlined row-icon">recycling</span> Recargar
               </button>
             </div>
 
@@ -1818,13 +2037,13 @@
         {#if vectorizacionTab === 'lightbot'}
           <div class="lightbot-wrap">
             <div class="seccion-header">
-              <h3>💬 Configuración Lightbot</h3>
+              <h3>💬 Configuración Chatbot</h3>
             </div>
             <p class="lightbot-desc">Define los valores por defecto del widget embebible. Estos se usarán cuando no se pasen parámetros por URL.</p>
 
             <div class="lightbot-form">
               <div class="lightbot-field">
-                <label for="lb-contexto">Contexto</label>
+                <label for="lb-contexto">Base de Conocimiento</label>
                 <select id="lb-contexto" bind:value={lightbotContexto}>
                   <option value="">— Seleccionar —</option>
                   {#each contextos as ctx}
@@ -1860,13 +2079,13 @@
             </div>
 
             <div class="lightbot-preview">
-              <h4>📋 URL del widget</h4>
-              <code class="lightbot-url">{AMBIENTES[lightbotAmbiente]?.frontend ?? window.location.origin}/embed/index.html?ambiente={lightbotAmbiente}</code>
+              <h4><span class="material-symbols-outlined row-icon">link</span> URL del widget</h4>
+              <code class="lightbot-url">{window.location.origin}/embed/index.html</code>
             </div>
 
             <!-- Default actual + guardar -->
             <div style="display:flex; align-items:center; gap:0.6rem; padding:0.75rem 1rem; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; margin-top:1rem; flex-wrap:wrap;">
-              <span style="color:rgba(255,255,255,0.6); font-size:0.85rem;">Default actual ({lightbotAmbiente}):</span>
+              <span style="color:rgba(255,255,255,0.6); font-size:0.85rem;">Default actual ({AMBIENTE_LABEL}):</span>
               {#if lightbotCargando}
                 <span style="color:rgba(255,255,255,0.6); font-size:0.9rem;">⟳ Cargando...</span>
               {:else if lightbotGuardado.contexto}
@@ -1908,26 +2127,30 @@
         <!-- LightBot -->
         {#if vectorizacionTab === 'lightbotpanel'}
           <div class="lightbot-wrap">
-            <div class="seccion-header">
-              <h3>🤖 LightBot</h3>
+            <div class="seccion-header" style="display:flex; align-items:baseline; gap:0.75rem; flex-wrap:wrap;">
+              <h3 style="margin:0;"><span class="material-symbols-outlined section-icon-h3">smart_toy</span> Chatbot</h3>
+              <span class="lightbot-desc" style="margin:0;">Visualizador del widget configurado en Receta.</span>
             </div>
-            <p class="lightbot-desc">Visualizador del widget configurado en LightbotEmbedder.</p>
 
             {#if !lightbotContexto}
               <p style="color: rgba(255,255,255,0.7); padding: 1rem; background: rgba(255,255,255,0.05); border-radius: 8px;">
-                Selecciona un contexto en <strong>💬 LightbotEmbedder</strong> para ver el widget.
+                Crea una receta o cárgala desde Administración para ver el widget.
               </p>
             {:else}
-              {@const lightbotEmbedUrl = `${AMBIENTES[lightbotAmbiente]?.frontend ?? window.location.origin}/embed/index.html?ambiente=${encodeURIComponent(lightbotAmbiente)}`}
+              {@const lightbotEmbedUrl = `${window.location.origin}/embed/index.html`}
               <div style="display:flex; align-items:center; gap:0.6rem; padding:0.6rem 1rem; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; margin-bottom:1rem; flex-wrap:wrap; font-size:0.85rem; color:rgba(255,255,255,0.75);">
-                <span><strong>Ambiente:</strong> {lightbotAmbiente}</span>
-                <span>·</span>
-                <span><strong>Contexto:</strong> {lightbotContexto}</span>
+                <span><strong>Base:</strong> {lightbotContexto}</span>
                 <span>·</span>
                 <span><strong>Modelo:</strong> {lightbotModelo}</span>
                 <span>·</span>
                 <span><strong>Historial:</strong> {lightbotHistorial}</span>
               </div>
+
+              <div class="lightbot-preview" style="margin-bottom: 1rem;">
+                <h4><span class="material-symbols-outlined row-icon">link</span> URL del widget</h4>
+                <code class="lightbot-url">{lightbotEmbedUrl}</code>
+              </div>
+
               <div style="width:100%; max-width:420px; height:70vh; min-height:520px; border:1px solid rgba(255,255,255,0.12); border-radius:12px; overflow:hidden; background:#fff; margin: 0 auto;">
                 <iframe
                   src={lightbotEmbedUrl}
@@ -1944,13 +2167,13 @@
         {#if vectorizacionTab === 'contextlightembedder'}
           <div class="lightbot-wrap">
             <div class="seccion-header">
-              <h3>📦 ContextLightEmbedder</h3>
+              <h3>📦 AdminEmbedder</h3>
             </div>
-            <p class="lightbot-desc">Genera la URL embebible de ContextLight (Gestión de Chatbot). Estos parámetros configuran el widget cuando se incrusta en otra página.</p>
+            <p class="lightbot-desc">Genera la URL embebible de Admin (Gestión de Chatbot). Estos parámetros configuran el widget cuando se incrusta en otra página.</p>
 
             <div class="lightbot-form">
               <div class="lightbot-field">
-                <label for="cle-contexto">Contexto</label>
+                <label for="cle-contexto">Base de Conocimiento</label>
                 <select id="cle-contexto" bind:value={contextlightContexto}>
                   <option value="">— Seleccionar —</option>
                   {#each contextos as ctx}
@@ -1961,13 +2184,13 @@
             </div>
 
             <div class="lightbot-preview">
-              <h4>📋 URL del widget</h4>
-              <code class="lightbot-url">{AMBIENTES[contextlightAmbiente]?.frontend ?? window.location.origin}/embed/contextlight.html?ambiente={contextlightAmbiente}</code>
+              <h4><span class="material-symbols-outlined row-icon">link</span> URL del widget</h4>
+              <code class="lightbot-url">{window.location.origin}/embed/contextlight.html</code>
             </div>
 
             <!-- Default actual + guardar -->
             <div style="display:flex; align-items:center; gap:0.6rem; padding:0.75rem 1rem; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; margin-top:1rem; flex-wrap:wrap;">
-              <span style="color:rgba(255,255,255,0.6); font-size:0.85rem;">Default actual ({contextlightAmbiente}):</span>
+              <span style="color:rgba(255,255,255,0.6); font-size:0.85rem;">Default actual ({AMBIENTE_LABEL}):</span>
               {#if contextlightCargando}
                 <span style="color:rgba(255,255,255,0.6); font-size:0.9rem;">⟳ Cargando...</span>
               {:else if contextlightGuardado.contexto}
@@ -2009,29 +2232,169 @@
         <!-- ContextLight -->
         {#if vectorizacionTab === 'contextlight'}
           <div class="lightbot-wrap">
-            <div class="seccion-header">
-              <h3>Gestión de Chatbot</h3>
+            <div class="seccion-header" style="display:flex; align-items:baseline; gap:0.75rem; flex-wrap:wrap;">
+              <h3 style="margin:0;"><span class="material-symbols-outlined section-icon-h3">dashboard_2_gear</span> Gestión de Chatbot</h3>
+              <span class="lightbot-desc" style="margin:0;">Visualizador del widget configurado en Receta.</span>
             </div>
-            <p class="lightbot-desc">Visualizador del widget configurado en ContextLightEmbedder.</p>
 
             {#if !contextlightContexto}
               <p style="color: rgba(255,255,255,0.7); padding: 1rem; background: rgba(255,255,255,0.05); border-radius: 8px;">
-                Selecciona un contexto en <strong>📦 ContextLightEmbedder</strong> para ver el widget.
+                Crea una receta o cárgala desde Administración para ver el widget.
               </p>
             {:else}
-              {@const contextlightEmbedUrl = `${AMBIENTES[contextlightAmbiente]?.frontend ?? window.location.origin}/embed/contextlight.html?ambiente=${encodeURIComponent(contextlightAmbiente)}`}
+              {@const contextlightEmbedUrl = `${window.location.origin}/embed/contextlight.html`}
               <div style="display:flex; align-items:center; gap:0.6rem; padding:0.6rem 1rem; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; margin-bottom:1rem; flex-wrap:wrap; font-size:0.85rem; color:rgba(255,255,255,0.75);">
-                <span><strong>Ambiente:</strong> {contextlightAmbiente}</span>
-                <span>·</span>
-                <span><strong>Contexto:</strong> {contextlightContexto}</span>
+                <span><strong>Base:</strong> {contextlightContexto}</span>
               </div>
+
+              <div class="lightbot-preview" style="margin-bottom: 1rem;">
+                <h4><span class="material-symbols-outlined row-icon">link</span> URL del widget</h4>
+                <code class="lightbot-url">{contextlightEmbedUrl}</code>
+              </div>
+
               <div style="width:100%; max-width:720px; height:70vh; min-height:520px; border:1px solid rgba(255,255,255,0.12); border-radius:12px; overflow:hidden; background:#fff; margin: 0 auto;">
                 <iframe
                   src={contextlightEmbedUrl}
-                  title="ContextLight preview"
+                  title="Admin preview"
                   style="width:100%; height:100%; border:0; display:block;"
                 ></iframe>
               </div>
+            {/if}
+          </div>
+        {/if}
+
+        <!-- Receta -->
+        {#if vectorizacionTab === 'receta'}
+          <div class="lightbot-wrap">
+            <div class="seccion-header">
+              <h3><span class="material-symbols-outlined section-icon-h3">restaurant_menu</span> Receta</h3>
+            </div>
+            <p class="lightbot-desc">Crea una nueva Base de Conocimiento y asígnala automáticamente al Chatbot embebible.</p>
+
+            <div class="crear-contexto-form" style="margin-top: 1rem; flex-direction: column; align-items: stretch; max-width: 480px;">
+              <div class="form-field">
+                <label for="receta-embedding">
+                  Modelo de Embedding
+                  {#if cargandoModelosEmbedding}
+                    <span style="font-size:0.75rem; color:#888; margin-left:8px;">(Cargando...)</span>
+                  {/if}
+                </label>
+                {#if modelosEmbedding.length > 0}
+                  <select
+                    id="receta-embedding"
+                    bind:value={nuevoContextoEmbedding}
+                    onchange={() => aplicarChunkSugerido(nuevoContextoEmbedding)}
+                    disabled={recetaCargando}
+                    class="contexto-input"
+                    style="display: block; width: 100%;"
+                  >
+                    <option value="">-- Selecciona Modelo --</option>
+                    {#each modelosEmbedding as emb (emb)}
+                      <option value={emb}>{emb}</option>
+                    {/each}
+                  </select>
+                {:else}
+                  <input
+                    id="receta-embedding"
+                    type="text"
+                    placeholder="ej: nomic-embed-text"
+                    bind:value={nuevoContextoEmbedding}
+                    disabled={recetaCargando}
+                    class="contexto-input"
+                  />
+                {/if}
+              </div>
+
+              <div class="form-field">
+                <label for="receta-chunk">Medida Embedding</label>
+                <input
+                  id="receta-chunk"
+                  type="number"
+                  value={nuevoContextoChunkSize}
+                  onchange={(e) => nuevoContextoChunkSize = e.target.value}
+                  disabled={recetaCargando}
+                  class="contexto-input"
+                  min="1"
+                  style="-moz-appearance: textfield;"
+                />
+              </div>
+
+              <div class="form-field">
+                <label for="receta-llm">Modelo LLM</label>
+                <select id="receta-llm" bind:value={lightbotModelo} disabled={recetaCargando} class="contexto-input" style="display:block; width:100%;">
+                  <optgroup label="Ollama">
+                    {#each MODELOS as m}
+                      <option value={m}>{m}</option>
+                    {/each}
+                  </optgroup>
+                  <optgroup label="OpenAI">
+                    {#each MODELOS_OPENAI as m}
+                      <option value={m}>{m.replace('gpt-', '')}</option>
+                    {/each}
+                  </optgroup>
+                </select>
+              </div>
+
+              <div class="form-field">
+                <label for="receta-historial">Historial (Turnos)</label>
+                <select id="receta-historial" bind:value={lightbotHistorial} disabled={recetaCargando} class="contexto-input" style="display:block; width:100%;">
+                  {#each [0, 1, 2, 3, 5, 10, 15, 20] as n}
+                    <option value={n}>{n === 0 ? 'Sin historial' : `${n} turnos`}</option>
+                  {/each}
+                </select>
+              </div>
+
+              <div class="form-field">
+                <label>Nombre que se generará</label>
+                <input
+                  type="text"
+                  value={nombreContextoGenerado}
+                  disabled
+                  class="contexto-input"
+                  style="opacity: 0.65; cursor: default;"
+                />
+              </div>
+
+              <div style="display:flex; gap:0.6rem; flex-wrap:wrap;">
+                <button
+                  onclick={ejecutarReceta}
+                  disabled={recetaCargando || !nuevoContextoEmbedding.trim() || !lightbotModelo}
+                  class="crear-contexto-btn"
+                  style="background: linear-gradient(135deg,#7c3aed,#a855f7); border-color:#7c3aed; display:inline-flex; align-items:center; gap:0.4rem;"
+                >
+                  {#if recetaCargando}
+                    <span class="material-symbols-outlined receta-spin" style="font-size:18px; vertical-align:middle; font-variation-settings: 'FILL' 0, 'wght' 500, 'GRAD' 0, 'opsz' 20;">progress_activity</span>
+                    Creando...
+                  {:else}
+                    <span class="material-symbols-outlined" style="font-size:18px; vertical-align:middle; font-variation-settings: 'FILL' 1, 'wght' 500, 'GRAD' 0, 'opsz' 20;">auto_awesome</span>
+                    Crear
+                  {/if}
+                </button>
+
+                <button
+                  onclick={guardarReceta}
+                  disabled={recetaCargando || !lightbotModelo}
+                  class="crear-contexto-btn"
+                  style="background:#198754; border-color:#198754; display:inline-flex; align-items:center; gap:0.4rem;"
+                >
+                  <span class="material-symbols-outlined" style="font-size:18px; vertical-align:middle; font-variation-settings: 'FILL' 0, 'wght' 500, 'GRAD' 0, 'opsz' 20;">save</span>
+                  Guardar
+                </button>
+              </div>
+            </div>
+
+            {#if recetaMensaje}
+              <p class="mensaje-contexto success" style="margin-top: 0.75rem;">
+                {#if recetaMensaje.startsWith('✅')}
+                  <span class="material-symbols-outlined success-icon">check_circle</span>
+                  {recetaMensaje.replace(/^✅\s*/, '')}
+                {:else}
+                  {recetaMensaje}
+                {/if}
+              </p>
+            {/if}
+            {#if recetaError}
+              <p style="color: #fff; font-size: 0.85rem; padding: 0.6rem 0.9rem; background: rgba(200,40,40,0.9); border-radius: 6px; margin-top: 0.75rem; font-weight: 500;">{recetaError}</p>
             {/if}
           </div>
         {/if}
@@ -2042,7 +2405,7 @@
             <div class="modal-content">
               <h3>⚠️ Confirmar Borrado</h3>
               <p>
-                ¿Estás seguro de que deseas borrar el contexto <strong>"{contextoABorrar}"</strong>?
+                ¿Estás seguro de que deseas borrar la base de conocimiento <strong>"{contextoABorrar}"</strong>?
               </p>
               <p style="font-size: 0.85rem; color: rgba(255,255,255,0.6);">
                 Esta acción es irreversible.
@@ -2076,7 +2439,7 @@
   {#if activeTab === 'admin'}
     <main class="vectorizacion-body">
       <div class="vectorizacion-container">
-        <h2 style="color: white; margin-bottom: 1.5rem;">👤 Administración</h2>
+        <h2 style="color: white; margin-bottom: 1.5rem; display:flex; align-items:center; gap:0.5rem;"><span class="material-symbols-outlined" style="font-size:28px; font-variation-settings: 'FILL' 0, 'wght' 500, 'GRAD' 0, 'opsz' 24;">admin_panel_settings</span> Administración</h2>
 
         <!-- Sub-tab bar -->
         <div class="vectorizacion-subtabs">
@@ -2085,21 +2448,35 @@
             class:active={adminTab === 'modelos'}
             onclick={() => { adminTab = 'modelos'; cargarModelos(); }}
           >
-            🤖 Modelos
+            <span class="material-symbols-outlined subtab-icon">psychology</span> Modelos
           </button>
           <button
             class="vectorizacion-subtab-btn"
             class:active={adminTab === 'alias'}
             onclick={() => { adminTab = 'alias'; cargarModelosEmbedding(); }}
           >
-            🏷️ Alias
+            <span class="material-symbols-outlined subtab-icon">label</span> Alias
           </button>
           <button
             class="vectorizacion-subtab-btn"
             class:active={adminTab === 'defaultcontext'}
             onclick={() => { adminTab = 'defaultcontext'; if (contextos.length === 0) cargarContextos(); }}
           >
-            ⭐ DefaultContext
+            <span class="material-symbols-outlined subtab-icon">star</span> DefaultContext
+          </button>
+          <button
+            class="vectorizacion-subtab-btn"
+            class:active={adminTab === 'bases'}
+            onclick={() => { adminTab = 'bases'; cargarContextosVectorizacion(); }}
+          >
+            <span class="material-symbols-outlined subtab-icon">folder</span> Bases
+          </button>
+          <button
+            class="vectorizacion-subtab-btn"
+            class:active={adminTab === 'cargarreceta'}
+            onclick={() => { adminTab = 'cargarreceta'; }}
+          >
+            <span class="material-symbols-outlined subtab-icon">upload_file</span> .config
           </button>
         </div>
 
@@ -2107,9 +2484,9 @@
         {#if adminTab === 'modelos'}
         <div class="modelos-wrap">
           <div class="seccion-header">
-            <h3>🤖 Modelos Disponibles</h3>
+            <h3><span class="material-symbols-outlined section-icon-h3">psychology</span> Modelos Disponibles</h3>
             <button onclick={cargarModelos} class="vectorizacion-action-btn" disabled={cargandoModelos}>
-              ↻ Recargar
+              <span class="material-symbols-outlined row-icon">recycling</span> Recargar
             </button>
           </div>
 
@@ -2159,7 +2536,7 @@
           <div class="seccion-header">
             <h3>🏷️ Alias de Modelos de Embedding</h3>
             <button onclick={cargarModelosEmbedding} class="vectorizacion-action-btn" disabled={cargandoModelosEmbedding}>
-              ↻ Recargar
+              <span class="material-symbols-outlined row-icon">recycling</span> Recargar
             </button>
           </div>
           <p style="color: rgba(255,255,255,0.7); font-size: 0.9rem; margin: 0.25rem 0 1rem 0; line-height: 1.5;">
@@ -2228,11 +2605,11 @@
           <div class="seccion-header">
             <h3>⭐ DefaultContext</h3>
             <button onclick={cargarContextos} class="vectorizacion-action-btn" disabled={cargandoContextos}>
-              ↻ Recargar
+              <span class="material-symbols-outlined row-icon">recycling</span> Recargar
             </button>
           </div>
           <p style="color: rgba(255,255,255,0.7); font-size: 0.9rem; margin: 0.25rem 0 1rem 0; line-height: 1.5;">
-            Selecciona el contexto que se usará por defecto.
+            Selecciona la base de conocimiento que se usará por defecto.
           </p>
 
           <!-- Badge: contexto default actual -->
@@ -2246,7 +2623,7 @@
           </div>
 
           <div class="lightbot-field" style="max-width: 420px;">
-            <label for="default-context-select">Contextos disponibles</label>
+            <label for="default-context-select">Bases de Conocimiento disponibles</label>
             <select
               id="default-context-select"
               bind:value={defaultContext}
@@ -2281,12 +2658,107 @@
           {#if cargandoContextos}
             <p style="color: rgba(255,255,255,0.6); font-size: 0.9rem; padding: 0.75rem 0;">⏳ Cargando contextos...</p>
           {:else if contextos.length === 0}
-            <p style="color: rgba(255,255,255,0.6); font-size: 0.9rem; padding: 0.75rem 0;">No hay contextos disponibles. Pulsa ↻ Recargar.</p>
+            <p style="color: rgba(255,255,255,0.6); font-size: 0.9rem; padding: 0.75rem 0;">No hay bases de conocimiento disponibles. Pulsa ↻ Recargar.</p>
           {/if}
 
           <p style="color: rgba(255,255,255,0.5); font-size: 0.8rem; margin-top: 1rem;">
             💾 La selección se guarda en este navegador (localStorage).
           </p>
+        </div>
+        {/if}
+
+        <!-- Bases -->
+        {#if adminTab === 'bases'}
+        <div class="modelos-wrap">
+          <div class="seccion-header">
+            <h3><span class="material-symbols-outlined section-icon-h3">folder</span> Bases de Conocimiento</h3>
+            <button onclick={cargarContextosVectorizacion} class="vectorizacion-action-btn" disabled={cargandoVectorizacionContextos} aria-label="Recargar bases" title="Recargar bases">
+              <span class="material-symbols-outlined row-icon">autorenew</span>
+            </button>
+          </div>
+          <p style="color: rgba(255,255,255,0.7); font-size: 0.9rem; margin: 0.25rem 0 1rem 0; line-height: 1.5;">
+            Listado de bases de conocimiento existentes en el ambiente <strong>{AMBIENTE_LABEL}</strong>.
+          </p>
+
+          {#if cargandoVectorizacionContextos}
+            <p style="color: rgba(255,255,255,0.6); font-size: 0.9rem; padding: 1rem 0;">⟳ Cargando bases...</p>
+          {:else if vectorizacionContextos.length === 0}
+            <p style="color: rgba(255,255,255,0.6); font-size: 0.9rem; padding: 1rem 0;">No hay bases de conocimiento disponibles.</p>
+          {:else}
+            <div class="contextos-table">
+              {#each vectorizacionContextos as ctx (ctx.nombre)}
+                <div class="contexto-row">
+                  <span class="contexto-nombre">{ctx.nombre}</span>
+                </div>
+              {/each}
+            </div>
+            <p style="color: rgba(255,255,255,0.5); font-size: 0.8rem; margin-top: 0.75rem;">
+              Total: {vectorizacionContextos.length}
+            </p>
+          {/if}
+        </div>
+        {/if}
+
+        <!-- Cargar Receta -->
+        {#if adminTab === 'cargarreceta'}
+        <div class="modelos-wrap">
+          <div class="seccion-header">
+            <h3><span class="material-symbols-outlined section-icon-h3">upload_file</span> .config.</h3>
+          </div>
+
+          <div class="lightbot-field" style="max-width: 480px; margin-top: 1rem;">
+            <input
+              id="cargar-receta-archivo"
+              type="file"
+              accept="application/json,.json"
+              disabled={recetaCargando}
+              onchange={(e) => { cargarRecetaDesdeArchivo(e.target.files?.[0]); e.target.value = ''; }}
+              style="color: rgba(255,255,255,0.85); font-size: 0.9rem;"
+            />
+          </div>
+
+          {#if recetaCargando}
+            <p style="color: rgba(255,255,255,0.85); font-size: 0.9rem; margin-top: 0.75rem; display:flex; align-items:center; gap:0.5rem;">
+              <span class="material-symbols-outlined receta-spin" style="font-size:18px; vertical-align:middle; font-variation-settings: 'FILL' 0, 'wght' 500, 'GRAD' 0, 'opsz' 20;">progress_activity</span>
+              Ejecutando receta...
+            </p>
+          {/if}
+
+          {#if recetaPendiente}
+            <div style="margin-top: 0.75rem; padding: 0.9rem 1rem; background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.5); border-radius: 8px;">
+              <p style="color: #fbbf24; font-weight: 600; margin: 0 0 0.5rem 0; display:flex; align-items:center; gap:0.4rem;">
+                <span class="material-symbols-outlined" style="font-size:20px; color:#fbbf24; font-variation-settings: 'FILL' 1, 'wght' 500, 'GRAD' 0, 'opsz' 20;">warning</span>
+                Advertencias en la receta "{recetaPendiente.nombre}"
+              </p>
+              <ul style="color: rgba(255,255,255,0.85); font-size: 0.88rem; margin: 0 0 0.75rem 1.25rem; padding: 0; line-height: 1.5;">
+                {#each recetaPendiente.advertencias as adv}
+                  <li>{adv}</li>
+                {/each}
+              </ul>
+              <p style="color: rgba(255,255,255,0.7); font-size: 0.82rem; margin: 0 0 0.75rem 0;">
+                Si continúas, el API podría rechazar la operación con un error en runtime.
+              </p>
+              <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+                <button class="vectorizacion-action-btn" style="background:#6b7280; border-color:#6b7280;" onclick={cancelarRecetaPendiente}>Cancelar</button>
+                <button class="vectorizacion-action-btn" style="background:#dc2626; border-color:#dc2626;" onclick={forzarEjecutarReceta} disabled={recetaCargando}>Ejecutar de todos modos</button>
+              </div>
+            </div>
+          {/if}
+
+          {#if cargarRecetaError}
+            <p style="color: #fff; font-size: 0.9rem; padding: 0.6rem 0.9rem; background: rgba(200,40,40,0.9); border-radius: 6px; margin-top: 0.75rem; font-weight: 500;">{cargarRecetaError}</p>
+          {/if}
+
+          {#if cargarRecetaMensaje && !recetaCargando}
+            <p style="color: #4ade80; font-size: 0.9rem; font-weight: 500; margin-top: 0.75rem; display:flex; align-items:center; gap:0.4rem;">
+              {#if cargarRecetaMensaje.startsWith('✅')}
+                <span class="material-symbols-outlined success-icon" style="color:#4ade80;">check_circle</span>
+                {cargarRecetaMensaje.replace(/^✅\s*/, '')}
+              {:else}
+                {cargarRecetaMensaje}
+              {/if}
+            </p>
+          {/if}
         </div>
         {/if}
       </div>
@@ -2550,27 +3022,7 @@
     border-bottom-color: #0b1f4a;
   }
 
-  .app.vectorizacion .ambiente-toggle {
-    background: #0b1f4a;
-    border-color: rgba(255, 255, 255, 0.1);
-    margin-left: auto;
-    padding: 4px;
-    gap: 4px;
-  }
-
-  .app.vectorizacion .ambiente-btn {
-    font-size: 0.8rem;
-    padding: 5px 13px;
-    color: rgba(255, 255, 255, 0.9);
-  }
-
-  .app.vectorizacion .ambiente-btn.active {
-    background: #2952cc;
-    color: #fff;
-    box-shadow: 0 1px 6px rgba(10, 26, 80, 0.4);
-  }
-
-  /* Construcción tab - navy blue text throughout */
+/* Construcción tab - navy blue text throughout */
   .app.vectorizacion {
     color: #0a1a3a;
   }
@@ -2703,7 +3155,7 @@
   .header-left {
     display: flex;
     align-items: center;
-    gap: 2rem;
+    gap: 0.75rem;
   }
 
   .avatar {
@@ -2718,9 +3170,11 @@
     flex-shrink: 0;
   }
 
-  .avatar svg {
-    width: 24px;
-    height: 24px;
+  .avatar-icon {
+    font-size: 26px;
+    color: #fff;
+    font-variation-settings: 'FILL' 0, 'wght' 500, 'GRAD' 0, 'opsz' 24;
+    line-height: 1;
   }
 
   .header-info {
@@ -2794,44 +3248,6 @@
     flex: 1;
     display: flex;
     justify-content: center;
-  }
-
-  .ambiente-toggle {
-    display: flex;
-    gap: 3px;
-    background: rgba(0, 0, 0, 0.2);
-    padding: 3px;
-    border-radius: 18px;
-    border: 1px solid rgba(255, 255, 255, 0.15);
-  }
-
-  .ambiente-btn {
-    width: auto;
-    height: auto;
-    border-radius: 14px;
-    border: none;
-    background: transparent;
-    color: rgba(255, 255, 255, 0.5);
-    font-family: inherit;
-    font-size: 0.7rem;
-    font-weight: 600;
-    padding: 4px 10px;
-    cursor: pointer;
-    transition: background 0.2s, color 0.2s;
-    box-shadow: none;
-    letter-spacing: 0.01em;
-    text-transform: capitalize;
-  }
-
-  .ambiente-btn:hover:not(:disabled) {
-    background: rgba(255, 255, 255, 0.12);
-    color: rgba(255, 255, 255, 0.75);
-  }
-
-  .ambiente-btn.active {
-    background: rgba(255, 255, 255, 0.22);
-    color: #fff;
-    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
   }
 
   /* ── Chat body ───────────────────────────────────── */
@@ -3208,7 +3624,28 @@
 
   .admin-gear-btn:hover:not(:disabled) {
     opacity: 1;
+  }
+  .admin-gear-btn:hover:not(:disabled) .admin-gear-icon {
     transform: rotate(30deg);
+  }
+
+  .admin-gear-icon {
+    font-size: 20px;
+    color: inherit;
+    font-variation-settings: 'FILL' 0, 'wght' 500, 'GRAD' 0, 'opsz' 24;
+    line-height: 1;
+    vertical-align: middle;
+    margin-right: 0.25rem;
+    transition: transform 0.2s ease;
+    display: inline-block;
+  }
+
+  .tab-icon {
+    font-size: 20px;
+    color: inherit;
+    font-variation-settings: 'FILL' 0, 'wght' 500, 'GRAD' 0, 'opsz' 24;
+    vertical-align: middle;
+    margin-right: 0.25rem;
   }
 
   .admin-gear-btn,
@@ -3361,6 +3798,40 @@
     white-space: nowrap;
     flex-shrink: 0;
     min-width: max-content;
+  }
+  .vectorizacion-subtab-btn .subtab-icon,
+  .subtab-icon {
+    font-size: 18px;
+    color: #fff !important;
+    font-variation-settings: 'FILL' 1, 'wght' 500, 'GRAD' 0, 'opsz' 20;
+    line-height: 1;
+  }
+  .success-icon {
+    font-size: 18px;
+    color: #15803d;
+    font-variation-settings: 'FILL' 1, 'wght' 500, 'GRAD' 0, 'opsz' 20;
+    vertical-align: middle;
+    margin-right: 4px;
+  }
+  .section-icon-h3 {
+    font-size: 22px;
+    color: inherit;
+    font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+    vertical-align: middle;
+  }
+  .row-icon {
+    font-size: 18px;
+    color: inherit;
+    font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 20;
+    vertical-align: middle;
+  }
+  @keyframes receta-spin-anim {
+    to { transform: rotate(360deg); }
+  }
+  .receta-spin {
+    display: inline-block;
+    animation: receta-spin-anim 0.9s linear infinite;
+    transform-origin: center;
   }
 
   .vectorizacion-subtab-btn:hover:not(.active) {

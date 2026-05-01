@@ -1,26 +1,28 @@
 <script>
   // ─── Config ──────────────────────────────────────────
-  const AMBIENTES = {
-    desarrollo: { url: 'http://127.0.0.1:8000', proxy: '/api-desarrollo' },
-    staging: { url: 'https://mide-chatbot-api.buzzword.com.mx', proxy: '/api-staging' },
+  // El API se infiere del hostname donde corre el embed.
+  const HOSTNAME_TO_API = {
+    'mide-chatbot.buzzword.com.mx': 'https://mide-chatbot-api.buzzword.com.mx',
+    // Producción — ajustar cuando infra confirme el dominio del API:
+    'mide.org.mx': 'https://api.mide.org.mx',
   };
 
-  const DEFAULT_AMBIENTE = import.meta.env.DEV ? 'desarrollo' : 'staging';
+  const AMBIENTE_LABEL = (() => {
+    if (import.meta.env.DEV) return 'desarrollo';
+    const host = window.location.hostname;
+    if (host === 'mide-chatbot.buzzword.com.mx') return 'staging';
+    if (host === 'mide.org.mx') return 'producción';
+    return host || 'desconocido';
+  })();
 
-  const params = new URLSearchParams(window.location.search);
-  const ambienteParam = params.get('ambiente') || DEFAULT_AMBIENTE;
-
-  let ambienteSeleccionado = $state(
-    Object.keys(AMBIENTES).includes(ambienteParam) ? ambienteParam : DEFAULT_AMBIENTE
-  );
-
-  let apiUrl = $derived.by(() => {
-    const config = AMBIENTES[ambienteSeleccionado];
-    return {
-      real: config.url,
-      base: import.meta.env.DEV ? config.proxy : config.url,
-    };
-  });
+  const apiUrl = (() => {
+    if (import.meta.env.DEV) {
+      return { real: 'http://127.0.0.1:8000', base: '/api' };
+    }
+    const host = window.location.hostname;
+    const real = HOSTNAME_TO_API[host] ?? window.location.origin;
+    return { real, base: real };
+  })();
 
   // ─── Estado ──────────────────────────────────────────
   let contexto = $state('');
@@ -44,7 +46,7 @@
       const res = await fetch(`${apiUrl.base}/configContextlight`, { signal: controller.signal });
       clearTimeout(timeout);
       if (res.status === 404) {
-        configError = `No hay configuración para el ambiente "${ambienteSeleccionado}". Defínela desde la administración.`;
+        configError = `No hay configuración para el ambiente "${AMBIENTE_LABEL}". Defínela desde la administración.`;
         return;
       }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -52,7 +54,7 @@
       contexto = data.contexto ?? '';
       configCargada = true;
       if (!contexto) {
-        configError = `La configuración del ambiente "${ambienteSeleccionado}" no tiene contexto.`;
+        configError = `La configuración del ambiente "${AMBIENTE_LABEL}" no tiene base de conocimiento.`;
         return;
       }
       cargarDocumentos();
@@ -141,9 +143,7 @@
   <!-- Mini header -->
   <header class="embed-header">
     <div class="embed-avatar">
-      <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <path d="M19 3H5c-1.11 0-2 .89-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.11-.9-2-2-2zM9 17H7v-7h2v7zm4 0h-2V7h2v10zm4 0h-2v-4h2v4z" fill="white"/>
-      </svg>
+      <span class="material-symbols-outlined">dashboard_2_gear</span>
     </div>
     <div class="embed-header-info">
       <span class="embed-title">Gestión de Chatbot</span>
@@ -152,7 +152,7 @@
       {/if}
     </div>
     <button class="embed-reload" onclick={cargarDocumentos} disabled={cargando} title="Recargar" aria-label="Recargar">
-      ↻
+      <span class="material-symbols-outlined">autorenew</span>
     </button>
   </header>
 
@@ -165,20 +165,20 @@
     {#if !configCargada && !configError}
       <p class="empty-msg">⟳ Cargando configuración...</p>
     {:else if !contexto}
-      <p class="empty-msg">No se pudo determinar el contexto. Verifica la administración del ambiente <strong>{ambienteSeleccionado}</strong>.</p>
+      <p class="empty-msg">No se pudo determinar la base de conocimiento. Verifica la administración del ambiente <strong>{AMBIENTE_LABEL}</strong>.</p>
     {:else}
       <section class="card">
-        <h3>📋 Documentos</h3>
+        <h3><span class="material-symbols-outlined section-icon">document_scanner</span> Documentos</h3>
         {#if cargando}
           <p class="muted">⟳ Cargando documentos...</p>
         {:else if documentos.length === 0}
-          <p class="muted">No hay documentos en este contexto.</p>
+          <p class="muted">No hay documentos en esta base de conocimiento.</p>
         {:else}
           <ul class="doc-list">
             {#each documentos as doc (doc)}
               <li class="doc-row">
-                <span>📄 {doc}</span>
-                <button class="btn-trash" disabled={cargandoBorrar} onclick={() => confirmarBorrar = doc} title="Borrar">🗑️</button>
+                <span><span class="material-symbols-outlined doc-icon">article</span> {doc}</span>
+                <button class="btn-trash" disabled={cargandoBorrar} onclick={() => confirmarBorrar = doc} title="Borrar"><span class="material-symbols-outlined">delete</span></button>
               </li>
             {/each}
           </ul>
@@ -189,7 +189,7 @@
       </section>
 
       <section class="card">
-        <h3>📤 Agregar documento</h3>
+        <h3><span class="material-symbols-outlined section-icon">upload_file</span> Agregar documento</h3>
         <label class="file-label">
           <span class="file-fake-btn">Seleccionar archivo</span>
           <span class="file-name">{archivo ? archivo.name : 'Sin archivo'}</span>
@@ -281,17 +281,18 @@
     width: 36px;
     height: 36px;
     border-radius: 50%;
-    background: #6b8aaf;
-    border: 2px solid #8faac8;
+    background: #fff;
+    border: 1px solid #e0e0e0;
     display: flex;
     align-items: center;
     justify-content: center;
     flex-shrink: 0;
   }
 
-  .embed-avatar svg {
-    width: 20px;
-    height: 20px;
+  .embed-avatar .material-symbols-outlined {
+    font-size: 22px;
+    color: #1f1f1f;
+    font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
   }
 
   .embed-header-info {
@@ -334,6 +335,11 @@
   }
   .embed-reload:hover:not(:disabled) { background: #d4e4f7; }
   .embed-reload:disabled { opacity: 0.5; cursor: not-allowed; }
+  .embed-reload .material-symbols-outlined {
+    font-size: 18px;
+    color: #1f1f1f;
+    font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 20;
+  }
 
   /* ── Body ───────────────────────────── */
   .embed-body {
@@ -380,6 +386,21 @@
     color: #1a1a2e;
     margin-bottom: 0.6rem;
     font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  .section-icon {
+    font-size: 18px;
+    color: #1f1f1f;
+    font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 20;
+  }
+  .doc-icon {
+    font-size: 18px;
+    color: #1f1f1f;
+    font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 20;
+    vertical-align: middle;
+    margin-right: 4px;
   }
 
   .muted {
@@ -429,6 +450,15 @@
     border-color: #f5a5a5;
   }
   .btn-trash:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn-trash .material-symbols-outlined {
+    font-size: 18px;
+    color: #1f1f1f;
+    font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 20;
+    vertical-align: middle;
+  }
+  .btn-trash:hover:not(:disabled) .material-symbols-outlined {
+    color: #c8102e;
+  }
 
   /* File input */
   .file-label {

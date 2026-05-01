@@ -18,16 +18,10 @@ export default defineConfig(({ mode }) => {
     },
     server: {
       proxy: {
-        '/api-desarrollo': {
+        '/api': {
           target: 'http://127.0.0.1:8000',
           changeOrigin: true,
-          rewrite: (path) => path.replace(/^\/api-desarrollo/, ''),
-        },
-        '/api-staging': {
-          target: 'https://mide-chatbot-api.buzzword.com.mx',
-          changeOrigin: true,
-          secure: true,
-          rewrite: (path) => path.replace(/^\/api-staging/, ''),
+          rewrite: (path) => path.replace(/^\/api/, ''),
         },
       },
     },

@@ -2,28 +2,29 @@
   import { tick, onMount } from 'svelte';
 
   // ─── Config ──────────────────────────────────────────
-  const AMBIENTES = {
-    desarrollo: { url: 'http://127.0.0.1:8000', proxy: '/api-desarrollo' },
-    staging: { url: 'https://mide-chatbot-api.buzzword.com.mx', proxy: '/api-staging' },
+  // El API se infiere del hostname donde corre el embed.
+  const HOSTNAME_TO_API = {
+    'mide-chatbot.buzzword.com.mx': 'https://mide-chatbot-api.buzzword.com.mx',
+    // Producción — ajustar cuando infra confirme el dominio del API:
+    'mide.org.mx': 'https://api.mide.org.mx',
   };
 
-  const DEFAULT_AMBIENTE = import.meta.env.DEV ? 'desarrollo' : 'staging';
+  const AMBIENTE_LABEL = (() => {
+    if (import.meta.env.DEV) return 'desarrollo';
+    const host = window.location.hostname;
+    if (host === 'mide-chatbot.buzzword.com.mx') return 'staging';
+    if (host === 'mide.org.mx') return 'producción';
+    return host || 'desconocido';
+  })();
 
-  // Leer SOLO el ambiente desde la URL: ?ambiente=staging
-  const params = new URLSearchParams(window.location.search);
-  const ambienteParam = params.get('ambiente') || DEFAULT_AMBIENTE;
-
-  let ambienteSeleccionado = $state(
-    Object.keys(AMBIENTES).includes(ambienteParam) ? ambienteParam : DEFAULT_AMBIENTE
-  );
-
-  let apiUrl = $derived.by(() => {
-    const config = AMBIENTES[ambienteSeleccionado];
-    return {
-      real: config.url,
-      base: import.meta.env.DEV ? config.proxy : config.url,
-    };
-  });
+  const apiUrl = (() => {
+    if (import.meta.env.DEV) {
+      return { real: 'http://127.0.0.1:8000', base: '/api' };
+    }
+    const host = window.location.hostname;
+    const real = HOSTNAME_TO_API[host] ?? window.location.origin;
+    return { real, base: real };
+  })();
 
   // ─── Estado ──────────────────────────────────────────
   let contextoSeleccionado = $state('');
@@ -34,6 +35,7 @@
   let chatContainer;
   let configError = $state('');
   let configCargada = $state(false);
+  let contextoInvalido = $state(false);
 
   function formatTime(date) {
     return date.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' });
@@ -57,7 +59,7 @@
       const res = await fetch(`${apiUrl.base}/configLightbot`, { signal: controller.signal });
       clearTimeout(timeout);
       if (res.status === 404) {
-        configError = `No hay configuración para el ambiente "${ambienteSeleccionado}". Defínela desde la administración.`;
+        configError = `No hay configuración para el ambiente "${AMBIENTE_LABEL}". Defínela desde la administración.`;
         return;
       }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -67,10 +69,40 @@
       maxTurnos = typeof data.historial === 'number' ? data.historial : 5;
       configCargada = true;
       if (!contextoSeleccionado) {
-        configError = `La configuración del ambiente "${ambienteSeleccionado}" no tiene contexto.`;
+        configError = `La configuración del ambiente "${AMBIENTE_LABEL}" no tiene base de conocimiento.`;
+        return;
       }
+      // Verificar que la base de conocimiento exista realmente en el backend
+      await verificarContextoExiste();
     } catch (err) {
       configError = `No se pudo cargar la configuración: ${err.message}`;
+    }
+  }
+
+  // Verifica si el contexto configurado aún existe en la lista de contextos del API.
+  // Si no existe, deshabilita el chatbot antes de que el usuario intente escribir.
+  async function verificarContextoExiste() {
+    if (!contextoSeleccionado) return;
+    try {
+      const res = await fetch(`${apiUrl.base}/listarContextos`);
+      if (!res.ok) return; // sin info: no pre-deshabilitamos por fallo de red
+      const data = await res.json();
+      let nombres = [];
+      if (data['Contextos existentes para este chatbot']) {
+        nombres = Object.keys(data['Contextos existentes para este chatbot']);
+      } else if (Array.isArray(data)) {
+        nombres = data;
+      } else if (data.contextos && typeof data.contextos === 'object') {
+        nombres = Array.isArray(data.contextos) ? data.contextos : Object.keys(data.contextos);
+      } else {
+        const firstObjKey = Object.keys(data).find((k) => typeof data[k] === 'object' && data[k] !== null);
+        if (firstObjKey) nombres = Object.keys(data[firstObjKey]);
+      }
+      if (!nombres.includes(contextoSeleccionado)) {
+        contextoInvalido = true;
+      }
+    } catch (err) {
+      console.warn('No se pudo verificar la base de conocimiento:', err.message);
     }
   }
 
@@ -138,15 +170,30 @@
         data.Mensaje ?? data.respuesta ?? data.answer ?? data.response ?? data.message ?? data.content ?? data;
       const botText = typeof candidato === 'string' ? candidato : JSON.stringify(candidato, null, 2);
 
-      messages = [
-        ...messages,
-        {
-          id: Date.now() + 1,
-          role: 'bot',
-          text: botText,
-          time: `${formatTime(new Date())} · ${elapsed}ms`,
-        },
-      ];
+      // Detectar si la base de conocimiento ya no existe
+      if (typeof botText === 'string' && /no existe ese contexto/i.test(botText)) {
+        contextoInvalido = true;
+        messages = [
+          ...messages,
+          {
+            id: Date.now() + 1,
+            role: 'bot',
+            text: 'Este chatbot no está disponible: su base de conocimiento ya no existe. Pide al administrador que configure una nueva base.',
+            time: formatTime(new Date()),
+            isError: true,
+          },
+        ];
+      } else {
+        messages = [
+          ...messages,
+          {
+            id: Date.now() + 1,
+            role: 'bot',
+            text: botText,
+            time: `${formatTime(new Date())} · ${elapsed}ms`,
+          },
+        ];
+      }
     } catch (err) {
       messages = [
         ...messages,
@@ -192,6 +239,8 @@
 
   {#if configError}
     <div class="config-error">❌ {configError}</div>
+  {:else if contextoInvalido}
+    <div class="config-error">❌ Base de conocimiento no disponible. Pide al administrador que configure una nueva.</div>
   {/if}
 
   <!-- Chat body -->
@@ -214,9 +263,7 @@
       {#if isLoading}
         <div class="message-row bot">
           <div class="bot-avatar">
-            <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zM8 17.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5zM9.5 8c0-1.38 1.12-2.5 2.5-2.5s2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5S9.5 9.38 9.5 8zm6.5 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z" fill="currentColor"/>
-            </svg>
+            <span class="material-symbols-outlined">smart_toy</span>
           </div>
           <div class="bubble-wrap">
             <div class="bubble typing">
@@ -234,13 +281,13 @@
       <textarea
         bind:value={inputText}
         onkeydown={handleKeydown}
-        placeholder={configCargada ? "Escribe tu mensaje..." : "Cargando configuración..."}
+        placeholder={contextoInvalido ? "Chatbot no disponible" : (configCargada ? "Escribe tu mensaje..." : "Cargando configuración...")}
         rows="1"
-        disabled={isLoading || !configCargada || !!configError}
+        disabled={isLoading || !configCargada || !!configError || contextoInvalido}
       ></textarea>
       <button
         onclick={sendMessage}
-        disabled={!inputText.trim() || isLoading || !configCargada || !!configError}
+        disabled={!inputText.trim() || isLoading || !configCargada || !!configError || contextoInvalido}
         aria-label="Enviar mensaje"
       >
         <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -305,8 +352,8 @@
     width: 36px;
     height: 36px;
     border-radius: 50%;
-    background: #6b8aaf;
-    border: 2px solid #8faac8;
+    background: #fff;
+    border: 1px solid #e0e0e0;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -315,8 +362,8 @@
 
   .embed-avatar .material-symbols-outlined {
     font-size: 22px;
-    color: #fff;
-    font-variation-settings: 'FILL' 1, 'wght' 500, 'GRAD' 0, 'opsz' 24;
+    color: #1f1f1f;
+    font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
   }
 
   .embed-header-info {
@@ -383,19 +430,18 @@
     width: 28px;
     height: 28px;
     border-radius: 50%;
-    background: #6b8aaf;
-    border: 1.5px solid #8faac8;
+    background: #fff;
+    border: 1px solid #e0e0e0;
     display: flex;
     align-items: center;
     justify-content: center;
     flex-shrink: 0;
-    color: #fff;
   }
 
   .bot-avatar .material-symbols-outlined {
     font-size: 17px;
-    color: #fff;
-    font-variation-settings: 'FILL' 1, 'wght' 500, 'GRAD' 0, 'opsz' 20;
+    color: #1f1f1f;
+    font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 20;
   }
 
   .bubble-wrap {
