@@ -75,15 +75,17 @@
   // Cada despliegue queda atado a un único API. Sin selector multi-ambiente.
   const HOSTNAME_TO_API = {
     'mide-chatbot.buzzword.com.mx': 'https://mide-chatbot-api.buzzword.com.mx',
-    // Producción — ajustar cuando infra confirme el dominio del API:
-    'mide.org.mx': 'https://api.mide.org.mx',
+    'mide-chatbot.mide.org.mx':     'https://mide-chatbot-api.mide.org.mx',
+    // Acceso directo por IP interna (red corporativa) — HTTP plano:
+    '172.10.30.15':  'http://172.10.30.15:8080',
+    '172.16.60.233': 'http://172.16.60.233:8080',
   };
 
   const AMBIENTE_LABEL = (() => {
     if (import.meta.env.DEV) return 'desarrollo';
     const host = typeof window !== 'undefined' ? window.location.hostname : '';
-    if (host === 'mide-chatbot.buzzword.com.mx') return 'staging';
-    if (host === 'mide.org.mx') return 'producción';
+    if (host === 'mide-chatbot.buzzword.com.mx' || host === '172.10.30.15') return 'staging';
+    if (host === 'mide-chatbot.mide.org.mx' || host === '172.16.60.233') return 'producción';
     return host || 'desconocido';
   })();
 
