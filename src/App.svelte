@@ -91,10 +91,10 @@
 
   const apiUrl = (() => {
     if (import.meta.env.DEV) {
-      return { real: 'http://127.0.0.1:8000', base: '/api' };
+      return { real: 'http://127.0.0.1:8080', base: '/api' };
     }
     const host = typeof window !== 'undefined' ? window.location.hostname : '';
-    const real = HOSTNAME_TO_API[host] ?? (typeof window !== 'undefined' ? window.location.origin : '');
+    const real = HOSTNAME_TO_API[host] ?? (typeof window !== 'undefined' ? `${window.location.protocol}//${host}:8080` : '');
     return { real, base: real };
   })();
 
@@ -160,6 +160,20 @@
   let defaultContext = $state(defaultContextGuardado);
   let defaultContextGuardadoFlash = $state(false);
   let defaultContextFlashTimer = null;
+
+  // Estado para feedback de "URL copiada"
+  let urlCopiadaFlashId = $state(null);
+  let urlCopiadaTimer = null;
+  async function copiarUrlEmbed(url, id) {
+    try {
+      await navigator.clipboard.writeText(url);
+      urlCopiadaFlashId = id;
+      if (urlCopiadaTimer) clearTimeout(urlCopiadaTimer);
+      urlCopiadaTimer = setTimeout(() => { urlCopiadaFlashId = null; }, 1500);
+    } catch (err) {
+      console.error('No se pudo copiar:', err);
+    }
+  }
 
   function guardarDefaultContext() {
     localStorage.setItem('mide_default_context', defaultContext);
@@ -357,11 +371,24 @@
   let nuevoContextoEmbedding = $state('');
   let nuevoContextoChunkSize = $state('1500');
 
-  // Nombre auto-generado: mide-<alias_modelo>-<chunk>
+  // Nombre auto-generado: mide-<alias_modelo>-<chunk>-<n>
+  // donde <n> es el siguiente número disponible (1 si no existe ninguno con ese prefijo)
   const nombreContextoGenerado = $derived.by(() => {
     const alias = aliasModeloEmbedding(nuevoContextoEmbedding);
     const chunk = nuevoContextoChunkSize || '1500';
-    return alias ? `mide-${alias}-${chunk}` : 'mide--1500';
+    if (!alias) return 'mide--1500-1';
+    const prefix = `mide-${alias}-${chunk}-`;
+    // Mira tanto la lista del chat (contextos) como la del admin (vectorizacionContextos)
+    const nombres = [
+      ...contextos,
+      ...vectorizacionContextos.map(c => c.nombre),
+    ];
+    const numeros = nombres
+      .filter(n => typeof n === 'string' && n.startsWith(prefix))
+      .map(n => parseInt(n.slice(prefix.length), 10))
+      .filter(n => !isNaN(n) && n >= 1);
+    const next = numeros.length === 0 ? 1 : Math.max(...numeros) + 1;
+    return `${prefix}${next}`;
   });
   let cargandoCrearContexto = $state(false);
   let mensajeCrearContexto = $state('');
@@ -1471,7 +1498,7 @@
       <div class="avatar">
         <span class="material-symbols-outlined avatar-icon">universal_currency_alt</span>
       </div>
-      <div class="header-info" style="flex-direction: row; align-items: baseline; gap: 0.75rem; flex-wrap: wrap;">
+      <div class="header-info">
         <h1 class="header-title">Asistente MIDE</h1>
         <span class="header-status" onclick={verificarSalud} onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && verificarSalud()} title="Click para verificar conexión" role="button" tabindex="0">
           <span class="status-dot" class:online={estadoSalud === 'online'} class:offline={estadoSalud === 'offline'} class:checking={estadoSalud === 'checking'}></span>
@@ -1486,13 +1513,12 @@
       </div>
     </div>
 
+    <span class="host-badge" title="Host actual del frontend">
+      <span class="host-badge-label">HOST</span>
+      <span class="host-badge-value">{typeof window !== 'undefined' ? window.location.hostname : 'desconocido'}</span>
+    </span>
+
     <div class="tabs-toggle">
-      <button
-        class="tab-btn"
-        class:active={activeTab === 'vectorizacion'}
-        onclick={() => { activeTab = 'vectorizacion'; verificarSalud(); }}
-        aria-pressed={activeTab === 'vectorizacion'}
-      ><span class="material-symbols-outlined tab-icon">widgets</span> Embebidos</button>
       <button
         class="tab-btn admin-gear-btn"
         class:active={activeTab === 'admin'}
@@ -1500,6 +1526,12 @@
         aria-pressed={activeTab === 'admin'}
         title="Administración"
       ><span class="material-symbols-outlined admin-gear-icon">settings</span> Configuración</button>
+      <button
+        class="tab-btn"
+        class:active={activeTab === 'vectorizacion'}
+        onclick={() => { activeTab = 'vectorizacion'; verificarSalud(); }}
+        aria-pressed={activeTab === 'vectorizacion'}
+      ><span class="material-symbols-outlined tab-icon">widgets</span> Embebidos</button>
     </div>
   </header>
 
@@ -1659,7 +1691,7 @@
           <button
             class="vectorizacion-subtab-btn"
             class:active={vectorizacionTab === 'receta'}
-            onclick={() => { vectorizacionTab = 'receta'; cargarModelosEmbedding(); }}
+            onclick={() => { vectorizacionTab = 'receta'; cargarModelosEmbedding(); cargarContextosVectorizacion(); }}
           >
             <span class="material-symbols-outlined subtab-icon">restaurant_menu</span> Receta
           </button>
@@ -2129,28 +2161,46 @@
         <!-- LightBot -->
         {#if vectorizacionTab === 'lightbotpanel'}
           <div class="lightbot-wrap">
-            <div class="seccion-header" style="display:flex; align-items:baseline; gap:0.75rem; flex-wrap:wrap;">
-              <h3 style="margin:0;"><span class="material-symbols-outlined section-icon-h3">smart_toy</span> Chatbot</h3>
-              <span class="lightbot-desc" style="margin:0;">Visualizador del widget configurado en Receta.</span>
-            </div>
-
             {#if !lightbotContexto}
+              <div class="seccion-header" style="display:flex; align-items:baseline; gap:0.75rem; flex-wrap:wrap; margin-bottom: 0.4rem;">
+                <h3 style="margin:0;"><span class="material-symbols-outlined section-icon-h3">smart_toy</span> Chatbot</h3>
+                <span class="lightbot-desc" style="margin:0;">Visualizador del widget configurado en Receta.</span>
+              </div>
               <p style="color: rgba(255,255,255,0.7); padding: 1rem; background: rgba(255,255,255,0.05); border-radius: 8px;">
                 Crea una receta o cárgala desde Administración para ver el widget.
               </p>
             {:else}
               {@const lightbotEmbedUrl = `${window.location.origin}/embed/index.html`}
-              <div style="display:flex; align-items:center; gap:0.6rem; padding:0.6rem 1rem; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; margin-bottom:1rem; flex-wrap:wrap; font-size:0.85rem; color:rgba(255,255,255,0.75);">
-                <span><strong>Base:</strong> {lightbotContexto}</span>
-                <span>·</span>
-                <span><strong>Modelo:</strong> {lightbotModelo}</span>
-                <span>·</span>
-                <span><strong>Historial:</strong> {lightbotHistorial}</span>
-              </div>
+              <div style="display:flex; align-items:stretch; gap:1rem; margin-bottom: 1rem; flex-wrap:wrap;">
+                <div style="flex:1; min-width:280px; display:flex; flex-direction:column; gap:0.25rem; justify-content:space-between;">
+                  <div class="seccion-header" style="display:flex; align-items:baseline; gap:0.75rem; flex-wrap:wrap; margin-bottom: 0;">
+                    <h3 style="margin:0;"><span class="material-symbols-outlined section-icon-h3">smart_toy</span> Chatbot</h3>
+                    <span class="lightbot-desc" style="margin:0;">Visualizador del widget configurado en Receta.</span>
+                  </div>
+                  <div style="display:flex; align-items:center; gap:0.6rem; padding:0.6rem 1rem; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; flex-wrap:wrap; font-size:0.85rem; color:rgba(255,255,255,0.75);">
+                    <span><strong>Base:</strong> {lightbotContexto}</span>
+                    <span>·</span>
+                    <span><strong>Modelo:</strong> {lightbotModelo}</span>
+                    <span>·</span>
+                    <span><strong>Historial:</strong> {lightbotHistorial}</span>
+                  </div>
+                </div>
 
-              <div class="lightbot-preview" style="margin-bottom: 1rem;">
-                <h4><span class="material-symbols-outlined row-icon">link</span> URL del widget</h4>
-                <code class="lightbot-url">{lightbotEmbedUrl}</code>
+                <div class="lightbot-preview" style="align-self:stretch; flex-shrink:0;">
+                  <h4><span class="material-symbols-outlined row-icon">link</span> URL del widget</h4>
+                  <code class="lightbot-url">{lightbotEmbedUrl}</code>
+                  <button
+                    class="copy-url-btn"
+                    onclick={() => copiarUrlEmbed(lightbotEmbedUrl, 'chatbot')}
+                    title={urlCopiadaFlashId === 'chatbot' ? '¡Copiada!' : 'Copiar URL'}
+                    aria-label="Copiar URL"
+                  >
+                    <span class="material-symbols-outlined row-icon">{urlCopiadaFlashId === 'chatbot' ? 'check' : 'content_copy'}</span>
+                    {#if urlCopiadaFlashId === 'chatbot'}
+                      <span class="copy-toast">copiado</span>
+                    {/if}
+                  </button>
+                </div>
               </div>
 
               <div style="width:100%; max-width:420px; height:70vh; min-height:520px; border:1px solid rgba(255,255,255,0.12); border-radius:12px; overflow:hidden; background:#fff; margin: 0 auto;">
@@ -2234,27 +2284,45 @@
         <!-- ContextLight -->
         {#if vectorizacionTab === 'contextlight'}
           <div class="lightbot-wrap">
-            <div class="seccion-header" style="display:flex; align-items:baseline; gap:0.75rem; flex-wrap:wrap;">
-              <h3 style="margin:0;"><span class="material-symbols-outlined section-icon-h3">dashboard_2_gear</span> Gestión de Chatbot</h3>
-              <span class="lightbot-desc" style="margin:0;">Visualizador del widget configurado en Receta.</span>
-            </div>
-
             {#if !contextlightContexto}
+              <div class="seccion-header" style="display:flex; align-items:baseline; gap:0.75rem; flex-wrap:wrap;">
+                <h3 style="margin:0;"><span class="material-symbols-outlined section-icon-h3">dashboard_2_gear</span> Gestión de Chatbot</h3>
+                <span class="lightbot-desc" style="margin:0;">Visualizador del widget configurado en Receta.</span>
+              </div>
               <p style="color: rgba(255,255,255,0.7); padding: 1rem; background: rgba(255,255,255,0.05); border-radius: 8px;">
                 Crea una receta o cárgala desde Administración para ver el widget.
               </p>
             {:else}
               {@const contextlightEmbedUrl = `${window.location.origin}/embed/contextlight.html`}
-              <div style="display:flex; align-items:center; gap:0.6rem; padding:0.6rem 1rem; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; margin-bottom:1rem; flex-wrap:wrap; font-size:0.85rem; color:rgba(255,255,255,0.75);">
-                <span><strong>Base:</strong> {contextlightContexto}</span>
+              <div style="display:flex; align-items:stretch; gap:1rem; margin-bottom: 1rem; flex-wrap:wrap;">
+                <div style="flex:1; min-width:280px; display:flex; flex-direction:column; gap:0.25rem; justify-content:space-between;">
+                  <div class="seccion-header" style="display:flex; align-items:baseline; gap:0.75rem; flex-wrap:wrap; margin-bottom: 0;">
+                    <h3 style="margin:0;"><span class="material-symbols-outlined section-icon-h3">dashboard_2_gear</span> Gestión de Chatbot</h3>
+                    <span class="lightbot-desc" style="margin:0;">Visualizador del widget configurado en Receta.</span>
+                  </div>
+                  <div style="display:flex; align-items:center; gap:0.6rem; padding:0.6rem 1rem; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; flex-wrap:wrap; font-size:0.85rem; color:rgba(255,255,255,0.75);">
+                    <span><strong>Base:</strong> {contextlightContexto}</span>
+                  </div>
+                </div>
+
+                <div class="lightbot-preview" style="align-self:stretch; flex-shrink:0;">
+                  <h4><span class="material-symbols-outlined row-icon">link</span> URL del widget</h4>
+                  <code class="lightbot-url">{contextlightEmbedUrl}</code>
+                  <button
+                    class="copy-url-btn"
+                    onclick={() => copiarUrlEmbed(contextlightEmbedUrl, 'admin')}
+                    title={urlCopiadaFlashId === 'admin' ? '¡Copiada!' : 'Copiar URL'}
+                    aria-label="Copiar URL"
+                  >
+                    <span class="material-symbols-outlined row-icon">{urlCopiadaFlashId === 'admin' ? 'check' : 'content_copy'}</span>
+                    {#if urlCopiadaFlashId === 'admin'}
+                      <span class="copy-toast">copiado</span>
+                    {/if}
+                  </button>
+                </div>
               </div>
 
-              <div class="lightbot-preview" style="margin-bottom: 1rem;">
-                <h4><span class="material-symbols-outlined row-icon">link</span> URL del widget</h4>
-                <code class="lightbot-url">{contextlightEmbedUrl}</code>
-              </div>
-
-              <div style="width:100%; max-width:720px; height:70vh; min-height:520px; border:1px solid rgba(255,255,255,0.12); border-radius:12px; overflow:hidden; background:#fff; margin: 0 auto;">
+              <div style="width:100%; max-width:580px; height:70vh; min-height:520px; border:1px solid rgba(255,255,255,0.12); border-radius:12px; overflow:hidden; background:#fff; margin: 0 auto;">
                 <iframe
                   src={contextlightEmbedUrl}
                   title="Admin preview"
@@ -2451,13 +2519,6 @@
             onclick={() => { adminTab = 'modelos'; cargarModelos(); }}
           >
             <span class="material-symbols-outlined subtab-icon">psychology</span> Modelos
-          </button>
-          <button
-            class="vectorizacion-subtab-btn"
-            class:active={adminTab === 'alias'}
-            onclick={() => { adminTab = 'alias'; cargarModelosEmbedding(); }}
-          >
-            <span class="material-symbols-outlined subtab-icon">label</span> Alias
           </button>
           <button
             class="vectorizacion-subtab-btn"
@@ -3600,6 +3661,33 @@
     cursor: not-allowed;
   }
 
+  /* ── HOST badge ──────────────────────────────────── */
+  .host-badge {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.3rem 0.65rem;
+    background: #0b1f4a;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 6px;
+    font-family: 'Monaco', 'Courier New', monospace;
+    font-size: 0.72rem;
+    color: #fff;
+    user-select: all;
+  }
+  .host-badge .host-badge-label,
+  .host-badge span.host-badge-label {
+    color: #fff !important;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+  }
+  .host-badge .host-badge-value,
+  .host-badge span.host-badge-value {
+    color: #fff !important;
+    font-weight: 600;
+  }
+
   /* ── Tabs toggle ────────────────────────────────── */
   .tabs-toggle {
     display: flex;
@@ -3608,7 +3696,6 @@
     padding: 0;
     border-radius: 0;
     border: none;
-    margin-left: auto;
     border-bottom: 2px solid rgba(255, 255, 255, 0.2);
     align-items: center;
   }
@@ -3616,7 +3703,6 @@
   .admin-gear-btn {
     font-size: 1.4rem;
     padding: 0.5rem 0.75rem;
-    margin-left: auto;
     opacity: 0.7;
     line-height: 1;
     border-bottom: none !important;
@@ -4868,23 +4954,83 @@
     background: rgba(0, 0, 0, 0.2);
     border: 1px solid rgba(255, 255, 255, 0.1);
     border-radius: 8px;
-    padding: 1rem 1.25rem;
+    padding: 0.55rem 0.85rem;
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    flex-wrap: wrap;
+  }
+
+  .copy-url-btn {
+    position: relative;
+    background: #0b1f4a;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 6px;
+    padding: 0.45rem 0.55rem;
+    cursor: pointer;
+    color: #fff;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s, transform 0.1s;
+    flex-shrink: 0;
+  }
+
+  .copy-toast {
+    position: absolute;
+    bottom: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    margin-bottom: 4px;
+    background: #0b1f4a;
+    color: #ffd75e;
+    font-size: 0.7rem;
+    font-weight: 600;
+    padding: 0.25rem 0.55rem;
+    border-radius: 4px;
+    white-space: nowrap;
+    pointer-events: none;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+    animation: copy-toast-fly 1.5s ease-out forwards;
+  }
+
+  @keyframes copy-toast-fly {
+    0%   { opacity: 0; transform: translate(-50%, 4px); }
+    15%  { opacity: 1; transform: translate(-50%, 0); }
+    70%  { opacity: 1; transform: translate(-50%, -12px); }
+    100% { opacity: 0; transform: translate(-50%, -28px); }
+  }
+  .copy-url-btn .material-symbols-outlined {
+    color: #fff !important;
+  }
+  .copy-url-btn:hover {
+    background: #1a3470;
+  }
+  .copy-url-btn:active {
+    transform: scale(0.94);
   }
 
   .lightbot-preview h4 {
     font-size: 0.8rem;
     color: rgba(255, 255, 255, 0.7);
-    margin-bottom: 0.5rem;
+    margin-bottom: 0;
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
   }
 
   .lightbot-url {
-    display: block;
-    background: rgba(0, 0, 0, 0.3);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    display: inline-block;
+    flex: 1;
+    min-width: 0;
+    background: #0b1f4a;
+    border: 1px solid rgba(255, 255, 255, 0.15);
     border-radius: 6px;
     padding: 0.6rem 0.75rem;
     font-size: 0.78rem;
-    color: rgba(100, 200, 255, 0.9);
+    font-weight: 600;
+    color: #fff;
     word-break: break-all;
     font-family: 'Monaco', 'Courier New', monospace;
     line-height: 1.5;

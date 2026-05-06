@@ -21,10 +21,10 @@
 
   const apiUrl = (() => {
     if (import.meta.env.DEV) {
-      return { real: 'http://127.0.0.1:8000', base: '/api' };
+      return { real: 'http://127.0.0.1:8080', base: '/api' };
     }
     const host = window.location.hostname;
-    const real = HOSTNAME_TO_API[host] ?? window.location.origin;
+    const real = HOSTNAME_TO_API[host] ?? `${window.location.protocol}//${host}:8080`;
     return { real, base: real };
   })();
 

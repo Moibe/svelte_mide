@@ -6,7 +6,7 @@ import { resolve } from 'node:path';
 const rootDir = process.cwd();
 const apiDir = resolve(rootDir, '..', 'mide-chatbot');
 const API_HOST = '127.0.0.1';
-const API_PORT = 8000;
+const API_PORT = 8080;
 
 function pickPythonCommand() {
   const winVenvPython = resolve(apiDir, 'venv', 'Scripts', 'python.exe');
