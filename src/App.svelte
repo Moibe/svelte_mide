@@ -89,6 +89,15 @@
     return host || 'desconocido';
   })();
 
+  // True solo cuando estamos corriendo localmente (Vite dev o Vite preview en localhost).
+  // Sirve para gatear features que solo deben existir en desarrollo (ej. crear recetas).
+  const esLocal = (() => {
+    if (typeof window === 'undefined') return false;
+    if (import.meta.env.DEV) return true;
+    const host = window.location.hostname;
+    return host === 'localhost' || host === '127.0.0.1';
+  })();
+
   const apiUrl = (() => {
     if (import.meta.env.DEV) {
       return { real: 'http://127.0.0.1:8080', base: '/api' };
@@ -152,14 +161,8 @@
   let isLoading = $state(false);
   let chatContainer = $state(null);
   let activeTab = $state('vectorizacion');
-  let vectorizacionTab = $state('receta');
-  let adminTab = $state('modelos');
-  let defaultContextGuardado = $state(
-    typeof localStorage !== 'undefined' ? (localStorage.getItem('mide_default_context') || '') : ''
-  );
-  let defaultContext = $state(defaultContextGuardado);
-  let defaultContextGuardadoFlash = $state(false);
-  let defaultContextFlashTimer = null;
+  let vectorizacionTab = $state(esLocal ? 'receta' : 'lightbotpanel');
+  let adminTab = $state('cargarreceta');
 
   // Estado para feedback de "URL copiada"
   let urlCopiadaFlashId = $state(null);
@@ -173,14 +176,6 @@
     } catch (err) {
       console.error('No se pudo copiar:', err);
     }
-  }
-
-  function guardarDefaultContext() {
-    localStorage.setItem('mide_default_context', defaultContext);
-    defaultContextGuardado = defaultContext;
-    defaultContextGuardadoFlash = true;
-    if (defaultContextFlashTimer) clearTimeout(defaultContextFlashTimer);
-    defaultContextFlashTimer = setTimeout(() => { defaultContextGuardadoFlash = false; }, 2500);
   }
 
   // Lightbot config (defaults para embed) — persistidos en backend por ambiente
@@ -702,6 +697,25 @@
     }
   }
 
+  // Conteo de documentos por base — { nombreBase: número | 'cargando' | 'error' }
+  let vectorizacionDocCounts = $state({});
+
+  async function cargarConteoDocumentos(nombreBase) {
+    vectorizacionDocCounts[nombreBase] = 'cargando';
+    try {
+      const res = await fetch(`${apiUrl.base}/listarDocumentos?contexto=${encodeURIComponent(nombreBase)}`);
+      if (!res.ok) {
+        vectorizacionDocCounts[nombreBase] = 'error';
+        return;
+      }
+      const data = await res.json();
+      const docs = Array.isArray(data.documentos) ? data.documentos : [];
+      vectorizacionDocCounts[nombreBase] = docs.length;
+    } catch {
+      vectorizacionDocCounts[nombreBase] = 'error';
+    }
+  }
+
   async function cargarContextosVectorizacion() {
     cargandoVectorizacionContextos = true;
     // Solo carga modelos si no están en caché
@@ -724,6 +738,10 @@
         timestamp: new Date().toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })
       }));
       console.log('%c📂 Contextos Admin cargados:', 'color:#0077ff;font-weight:bold', $state.snapshot(vectorizacionContextos));
+
+      // Cargar conteos de docs en paralelo (no bloquea)
+      vectorizacionDocCounts = {};
+      vectorizacionContextos.forEach(c => cargarConteoDocumentos(c.nombre));
     } catch (err) {
       if (err.name === 'AbortError') {
         errorVectorizacionContextos = '⏳ La API no respondió (tiempo de espera agotado). Puede estar ocupada procesando un documento. Intenta recargar en unos momentos.';
@@ -818,7 +836,9 @@
   let recetaMensaje = $state('');
   let recetaError = $state('');
 
-  async function ejecutarReceta() {
+  // Si nombreOverride viene definido, salta el paso de crear base y solo reasigna al
+  // Chatbot/Admin a esa base existente. Si es null, hace el flujo completo (crear + asignar).
+  async function ejecutarReceta(nombreOverride = null) {
     if (!nuevoContextoEmbedding.trim()) {
       recetaError = '❌ Selecciona un modelo de embedding';
       return;
@@ -837,35 +857,42 @@
     recetaError = '';
     recetaMensaje = '';
 
-    const nombreContexto = nombreContextoGenerado;
+    const reusandoExistente = !!nombreOverride;
+    const nombreContexto = nombreOverride || nombreContextoGenerado;
 
     try {
-      // Paso 1: Crear la base de conocimiento
-      const nombre = encodeURIComponent(nombreContexto);
-      const modeloEmb = encodeURIComponent(nuevoContextoEmbedding.trim());
-      const chunk = encodeURIComponent(chunkSizeNum);
-      const urlCrear = `${apiUrl.base}/crearContexto?nombre_contexto=${nombre}&embedding_model=${modeloEmb}&chunk_size=${chunk}`;
+      if (!reusandoExistente) {
+        // Paso 1: Crear la base de conocimiento (solo si no estamos reusando)
+        const nombre = encodeURIComponent(nombreContexto);
+        const modeloEmb = encodeURIComponent(nuevoContextoEmbedding.trim());
+        const chunk = encodeURIComponent(chunkSizeNum);
+        const urlCrear = `${apiUrl.base}/crearContexto?nombre_contexto=${nombre}&embedding_model=${modeloEmb}&chunk_size=${chunk}`;
 
-      console.groupCollapsed('%c✨ Receta — paso 1/3: crear base', 'color:#a855f7;font-weight:bold');
-      console.log('URL:', `${apiUrl.real}/crearContexto`);
-      console.log('Params:', { nombre_contexto: nombreContexto, embedding_model: modeloEmb, chunk_size: chunkSizeNum });
-      console.groupEnd();
+        console.groupCollapsed('%c✨ Receta — paso 1/3: crear base', 'color:#a855f7;font-weight:bold');
+        console.log('URL:', `${apiUrl.real}/crearContexto`);
+        console.log('Params:', { nombre_contexto: nombreContexto, embedding_model: modeloEmb, chunk_size: chunkSizeNum });
+        console.groupEnd();
 
-      const resCrear = await fetch(urlCrear, { method: 'POST' });
-      if (!resCrear.ok) {
-        const txt = await resCrear.text().catch(() => '(sin detalles)');
-        let detail = txt;
-        try {
-          const j = JSON.parse(txt);
-          detail = typeof j.detail === 'string' ? j.detail : (j.detail ? JSON.stringify(j.detail) : detail);
-        } catch (_) {}
-        throw new Error(`No se pudo crear la base: ${detail}`);
+        const resCrear = await fetch(urlCrear, { method: 'POST' });
+        if (!resCrear.ok) {
+          const txt = await resCrear.text().catch(() => '(sin detalles)');
+          let detail = txt;
+          try {
+            const j = JSON.parse(txt);
+            detail = typeof j.detail === 'string' ? j.detail : (j.detail ? JSON.stringify(j.detail) : detail);
+          } catch (_) {}
+          throw new Error(`No se pudo crear la base: ${detail}`);
+        }
+      } else {
+        console.groupCollapsed(`%c♻ Receta — reusando base existente "${nombreContexto}"`, 'color:#16a34a;font-weight:bold');
+        console.log('Saltando /crearContexto. Solo se asignará al Chatbot y al Admin.');
+        console.groupEnd();
       }
 
-      // Paso 2: Asignar como default del Chatbot
+      // Asignar como default del Chatbot
       const snap = { contexto: nombreContexto, modelo: lightbotModelo, historial: lightbotHistorial };
 
-      console.groupCollapsed('%c✨ Receta — paso 2/3: asignar al Chatbot', 'color:#a855f7;font-weight:bold');
+      console.groupCollapsed('%c✨ Receta — asignar al Chatbot', 'color:#a855f7;font-weight:bold');
       console.log('URL:', `${apiUrl.real}/configLightbot`);
       console.log('Body:', snap);
       console.groupEnd();
@@ -876,13 +903,13 @@
         body: JSON.stringify(snap),
       });
       if (!resCfg.ok) {
-        throw new Error(`Base creada pero no se pudo asignar al Chatbot: HTTP ${resCfg.status}`);
+        throw new Error(`No se pudo asignar al Chatbot: HTTP ${resCfg.status}`);
       }
 
-      // Paso 3: Asignar como default del Admin
+      // Asignar como default del Admin
       const snapAdmin = { contexto: nombreContexto };
 
-      console.groupCollapsed('%c✨ Receta — paso 3/3: asignar al Admin', 'color:#a855f7;font-weight:bold');
+      console.groupCollapsed('%c✨ Receta — asignar al Admin', 'color:#a855f7;font-weight:bold');
       console.log('URL:', `${apiUrl.real}/configContextlight`);
       console.log('Body:', snapAdmin);
       console.groupEnd();
@@ -893,7 +920,7 @@
         body: JSON.stringify(snapAdmin),
       });
       if (!resAdmin.ok) {
-        throw new Error(`Base creada y asignada al Chatbot, pero no se pudo asignar al Admin: HTTP ${resAdmin.status}`);
+        throw new Error(`Asignado al Chatbot pero no se pudo asignar al Admin: HTTP ${resAdmin.status}`);
       }
 
       // Refrescar estado local
@@ -901,7 +928,9 @@
       lightbotContexto = nombreContexto;
       contextlightGuardado = snapAdmin;
       contextlightContexto = nombreContexto;
-      recetaMensaje = `✅ Receta lista: "${nombreContexto}" creada y asignada al Chatbot y al Admin.`;
+      recetaMensaje = reusandoExistente
+        ? `♻ Reusando base existente "${nombreContexto}" — documentos preservados. Asignada al Chatbot y al Admin.`
+        : `✅ Receta lista: "${nombreContexto}" creada y asignada al Chatbot y al Admin.`;
 
       setTimeout(() => {
         cargarContextosVectorizacion();
@@ -960,6 +989,7 @@
   let cargarRecetaError = $state('');
   let cargarRecetaMensaje = $state('');
   let recetaPendiente = $state(null); // { nombre, advertencias: [] } cuando hay validaciones que confirmar
+  let recetaCargadaInfo = $state(null); // { nombre, embedding_model, chunk_size, modelo_llm, historial, generado } después de cargar
 
   // Verifica que la receta sea ejecutable en el ambiente actual:
   //  · que los modelos (embedding y LLM) estén disponibles
@@ -1027,11 +1057,38 @@
     return advertencias;
   }
 
+  // Busca si hay una base existente con el mismo prefijo (mide-<alias>-<chunk>-).
+  // Si hay → devuelve la del número más alto (la más reciente).
+  // Si no hay → devuelve null y se debe crear una nueva.
+  function buscarBaseExistenteParaReusar() {
+    const alias = aliasModeloEmbedding(nuevoContextoEmbedding);
+    const chunk = nuevoContextoChunkSize || '1500';
+    if (!alias) return null;
+    const prefix = `mide-${alias}-${chunk}-`;
+    const nombres = [
+      ...contextos,
+      ...vectorizacionContextos.map(c => c.nombre),
+    ];
+    const matching = nombres
+      .filter(n => typeof n === 'string' && n.startsWith(prefix))
+      .map(n => ({ nombre: n, num: parseInt(n.slice(prefix.length), 10) }))
+      .filter(x => !isNaN(x.num) && x.num >= 1)
+      .sort((a, b) => b.num - a.num);
+    return matching.length > 0 ? matching[0].nombre : null;
+  }
+
   // Ejecuta ejecutarReceta() y refleja su resultado en el panel de Cargar Receta.
+  // Si existe una base con el mismo prefijo, la reusa (preserva documentos).
   async function ejecutarYReflejar() {
-    cargarRecetaMensaje = '⟳ Ejecutando receta...';
+    cargarRecetaMensaje = '⟳ Buscando bases existentes...';
     cargarRecetaError = '';
-    await ejecutarReceta();
+    // Refrescar la lista para asegurar que tenemos data fresca
+    await cargarContextosVectorizacion();
+    const reusable = buscarBaseExistenteParaReusar();
+    cargarRecetaMensaje = reusable
+      ? `⟳ Reusando base existente "${reusable}"...`
+      : '⟳ Creando base nueva...';
+    await ejecutarReceta(reusable);
     if (recetaError) {
       cargarRecetaError = recetaError;
       cargarRecetaMensaje = '';
@@ -1045,6 +1102,7 @@
     cargarRecetaError = '';
     cargarRecetaMensaje = '';
     recetaPendiente = null;
+    recetaCargadaInfo = null;
     if (!file) {
       cargarRecetaError = '❌ Selecciona un archivo de receta';
       return;
@@ -1063,6 +1121,16 @@
         nuevoContextoChunkSize = String(data.chunk_size ?? '1500');
         lightbotModelo = data.modelo_llm ?? 'mistral';
         lightbotHistorial = typeof data.historial === 'number' ? data.historial : 3;
+
+        // Guardar params cargados para mostrarlos en pantalla
+        recetaCargadaInfo = {
+          nombre: data.nombre ?? 'sin nombre',
+          embedding_model: data.embedding_model ?? '—',
+          chunk_size: data.chunk_size ?? '—',
+          modelo_llm: data.modelo_llm ?? '—',
+          historial: typeof data.historial === 'number' ? data.historial : '—',
+          generado: data.generado ?? null,
+        };
 
         cargarRecetaMensaje = `⟳ Receta "${data.nombre ?? 'sin nombre'}" cargada. Verificando modelos...`;
 
@@ -1498,25 +1566,28 @@
       <div class="avatar">
         <span class="material-symbols-outlined avatar-icon">universal_currency_alt</span>
       </div>
-      <div class="header-info">
-        <h1 class="header-title">Asistente MIDE</h1>
+      <div class="header-info" style="display:grid; grid-template-columns: max-content max-content; gap: 0.25rem 0.6rem; align-items: center;">
+        <h1 class="header-title" style="margin:0;">Asistente Virtual MIDE</h1>
+        <span class="host-badge" title="Host del frontend">
+          <span class="host-badge-label">FRONT</span>
+          <span class="host-badge-value">{typeof window !== 'undefined' ? window.location.host : 'desconocido'}</span>
+        </span>
         <span class="header-status" onclick={verificarSalud} onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && verificarSalud()} title="Click para verificar conexión" role="button" tabindex="0">
           <span class="status-dot" class:online={estadoSalud === 'online'} class:offline={estadoSalud === 'offline'} class:checking={estadoSalud === 'checking'}></span>
           {#if estadoSalud === 'online'}
-            En linea
+            API en línea
           {:else if estadoSalud === 'offline'}
-            Sin conexion
+            API sin conexión
           {:else}
-            Verificando...
+            Verificando API...
           {/if}
+        </span>
+        <span class="host-badge" title="Host del API">
+          <span class="host-badge-label">API</span>
+          <span class="host-badge-value">{(() => { try { return new URL(apiUrl.real).host.replace(/^127\.0\.0\.1\b/, 'localhost'); } catch { return apiUrl.real || 'desconocido'; } })()}</span>
         </span>
       </div>
     </div>
-
-    <span class="host-badge" title="Host actual del frontend">
-      <span class="host-badge-label">HOST</span>
-      <span class="host-badge-value">{typeof window !== 'undefined' ? window.location.hostname : 'desconocido'}</span>
-    </span>
 
     <div class="tabs-toggle">
       <button
@@ -1688,13 +1759,15 @@
 
         <!-- Sub-tab bar -->
         <div class="vectorizacion-subtabs">
-          <button
-            class="vectorizacion-subtab-btn"
-            class:active={vectorizacionTab === 'receta'}
-            onclick={() => { vectorizacionTab = 'receta'; cargarModelosEmbedding(); cargarContextosVectorizacion(); }}
-          >
-            <span class="material-symbols-outlined subtab-icon">restaurant_menu</span> Receta
-          </button>
+          {#if esLocal}
+            <button
+              class="vectorizacion-subtab-btn"
+              class:active={vectorizacionTab === 'receta'}
+              onclick={() => { vectorizacionTab = 'receta'; cargarModelosEmbedding(); cargarContextosVectorizacion(); }}
+            >
+              <span class="material-symbols-outlined subtab-icon">restaurant_menu</span> Receta
+            </button>
+          {/if}
           <button
             class="vectorizacion-subtab-btn"
             class:active={vectorizacionTab === 'lightbotpanel'}
@@ -2333,8 +2406,8 @@
           </div>
         {/if}
 
-        <!-- Receta -->
-        {#if vectorizacionTab === 'receta'}
+        <!-- Receta — solo en local -->
+        {#if vectorizacionTab === 'receta' && esLocal}
           <div class="lightbot-wrap">
             <div class="seccion-header">
               <h3><span class="material-symbols-outlined section-icon-h3">restaurant_menu</span> Receta</h3>
@@ -2469,40 +2542,40 @@
           </div>
         {/if}
 
-        <!-- Confirmación Modal -->
-        {#if mostrarConfirmacionBorrar}
-          <div class="modal-overlay">
-            <div class="modal-content">
-              <h3>⚠️ Confirmar Borrado</h3>
-              <p>
-                ¿Estás seguro de que deseas borrar la base de conocimiento <strong>"{contextoABorrar}"</strong>?
-              </p>
-              <p style="font-size: 0.85rem; color: rgba(255,255,255,0.6);">
-                Esta acción es irreversible.
-              </p>
-              <div class="modal-buttons">
-                <button
-                  onclick={() => mostrarConfirmacionBorrar = false}
-                  disabled={cargandoBorrarContexto}
-                  class="modal-btn cancel"
-                >
-                  Cancelar
-                </button>
-                <button
-                  onclick={borrarContextoConfirmado}
-                  disabled={cargandoBorrarContexto}
-                  class="modal-btn danger"
-                >
-                  {cargandoBorrarContexto ? '⟳ Borrando...' : 'Sí, borrar'}
-                </button>
-              </div>
-            </div>
-          </div>
-        {/if}
-
       </div>
       <p class="disclaimer">MIDE · Museo Interactivo de Economía</p>
     </main>
+  {/if}
+
+  <!-- Modal de confirmación de borrado de Base de Conocimiento (compartido entre vectorizacion y admin) -->
+  {#if mostrarConfirmacionBorrar}
+    <div class="modal-overlay">
+      <div class="modal-content">
+        <h3>⚠️ Confirmar Borrado</h3>
+        <p>
+          ¿Estás seguro de que deseas borrar la base de conocimiento <strong>"{contextoABorrar}"</strong>?
+        </p>
+        <p style="font-size: 0.85rem; color: rgba(255,255,255,0.6);">
+          Esta acción es irreversible.
+        </p>
+        <div class="modal-buttons">
+          <button
+            onclick={() => mostrarConfirmacionBorrar = false}
+            disabled={cargandoBorrarContexto}
+            class="modal-btn cancel"
+          >
+            Cancelar
+          </button>
+          <button
+            onclick={borrarContextoConfirmado}
+            disabled={cargandoBorrarContexto}
+            class="modal-btn danger"
+          >
+            {cargandoBorrarContexto ? '⟳ Borrando...' : 'Sí, borrar'}
+          </button>
+        </div>
+      </div>
+    </div>
   {/if}
 
   <!-- Administración section -->
@@ -2515,10 +2588,10 @@
         <div class="vectorizacion-subtabs">
           <button
             class="vectorizacion-subtab-btn"
-            class:active={adminTab === 'modelos'}
-            onclick={() => { adminTab = 'modelos'; cargarModelos(); }}
+            class:active={adminTab === 'cargarreceta'}
+            onclick={() => { adminTab = 'cargarreceta'; }}
           >
-            <span class="material-symbols-outlined subtab-icon">psychology</span> Modelos
+            <span class="material-symbols-outlined subtab-icon">upload_file</span> Carga .config
           </button>
           <button
             class="vectorizacion-subtab-btn"
@@ -2536,10 +2609,11 @@
           </button>
           <button
             class="vectorizacion-subtab-btn"
-            class:active={adminTab === 'cargarreceta'}
-            onclick={() => { adminTab = 'cargarreceta'; }}
+            class:active={adminTab === 'modelos'}
+            onclick={() => { adminTab = 'modelos'; cargarModelos(); }}
+            style="margin-left: auto;"
           >
-            <span class="material-symbols-outlined subtab-icon">upload_file</span> .config
+            <span class="material-symbols-outlined subtab-icon">psychology</span> Modelos
           </button>
         </div>
 
@@ -2666,67 +2740,60 @@
         {#if adminTab === 'defaultcontext'}
         <div class="modelos-wrap">
           <div class="seccion-header">
-            <h3>⭐ DefaultContext</h3>
-            <button onclick={cargarContextos} class="vectorizacion-action-btn" disabled={cargandoContextos}>
+            <h3><span class="material-symbols-outlined section-icon-h3">star</span> DefaultContext</h3>
+            <button onclick={() => { cargarLightbotDefaults(); cargarContextlightDefaults(); }} class="vectorizacion-action-btn" disabled={lightbotCargando || contextlightCargando}>
               <span class="material-symbols-outlined row-icon">recycling</span> Recargar
             </button>
           </div>
           <p style="color: rgba(255,255,255,0.7); font-size: 0.9rem; margin: 0.25rem 0 1rem 0; line-height: 1.5;">
-            Selecciona la base de conocimiento que se usará por defecto.
+            Configuración activa en este ambiente para los embebidos. Se actualiza automáticamente al cargar una receta desde <strong>.config</strong>.
           </p>
 
-          <!-- Badge: contexto default actual -->
-          <div style="display:flex; align-items:center; gap:0.6rem; padding:0.75rem 1rem; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; margin-bottom:1rem;">
-            <span style="color:rgba(255,255,255,0.6); font-size:0.85rem;">Default actual:</span>
-            {#if defaultContextGuardado}
-              <span style="color:#fff; font-weight:600; font-size:0.95rem;">⭐ {defaultContextGuardado}</span>
+          <!-- Card: Chatbot -->
+          <div style="padding:0.85rem 1rem; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; margin-bottom:0.75rem;">
+            <p style="margin:0 0 0.55rem 0; display:flex; align-items:center; gap:0.4rem; color:rgba(255,255,255,0.7); font-size:0.78rem; font-weight:600; letter-spacing:0.05em; text-transform:uppercase;">
+              <span class="material-symbols-outlined" style="font-size:18px; color:rgba(255,255,255,0.7); font-variation-settings: 'FILL' 0, 'wght' 500, 'GRAD' 0, 'opsz' 20;">smart_toy</span>
+              Chatbot
+            </p>
+            {#if lightbotCargando}
+              <p style="margin:0; color:rgba(255,255,255,0.6); font-size:0.85rem;">⟳ Cargando...</p>
+            {:else if lightbotGuardado.contexto}
+              <div style="display:grid; grid-template-columns: max-content 1fr; gap: 0.25rem 0.75rem; font-size: 0.88rem; color: rgba(255,255,255,0.9);">
+                <span style="color: rgba(255,255,255,0.6);">Base:</span>
+                <span style="font-weight: 600;">{lightbotGuardado.contexto}</span>
+                <span style="color: rgba(255,255,255,0.6);">Modelo LLM:</span>
+                <span>{lightbotGuardado.modelo}</span>
+                <span style="color: rgba(255,255,255,0.6);">Historial:</span>
+                <span>{lightbotGuardado.historial === 0 ? 'Sin historial' : `${lightbotGuardado.historial} turnos`}</span>
+              </div>
             {:else}
-              <span style="color:rgba(255,255,255,0.5); font-style:italic; font-size:0.9rem;">— Sin definir —</span>
+              <p style="margin:0; color:rgba(255,255,255,0.5); font-style:italic; font-size:0.9rem;">— Sin configurar — carga una receta desde <strong>.config</strong>.</p>
             {/if}
           </div>
 
-          <div class="lightbot-field" style="max-width: 420px;">
-            <label for="default-context-select">Bases de Conocimiento disponibles</label>
-            <select
-              id="default-context-select"
-              bind:value={defaultContext}
-              disabled={cargandoContextos}
-            >
-              <option value="">— Seleccionar —</option>
-              {#each contextos as ctx}
-                <option value={ctx}>{ctx}</option>
-              {/each}
-            </select>
-          </div>
-
-          <div style="display:flex; align-items:center; gap:0.75rem; margin-top:1rem; flex-wrap:wrap;">
-            <button
-              class="vectorizacion-action-btn"
-              onclick={guardarDefaultContext}
-              disabled={!defaultContext || defaultContext === defaultContextGuardado}
-              style="background:#198754; border-color:#198754;"
-            >
-              {#if defaultContext === defaultContextGuardado && defaultContextGuardado}
-                ✓ Ya es el default
-              {:else}
-                ⭐ Guardar como default
-              {/if}
-            </button>
-
-            {#if defaultContextGuardadoFlash}
-              <span style="color:#4ade80; font-weight:600; font-size:0.9rem;">✓ Guardado: <strong>{defaultContextGuardado}</strong></span>
+          <!-- Card: Admin -->
+          <div style="padding:0.85rem 1rem; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px;">
+            <p style="margin:0 0 0.55rem 0; display:flex; align-items:center; gap:0.4rem; color:rgba(255,255,255,0.7); font-size:0.78rem; font-weight:600; letter-spacing:0.05em; text-transform:uppercase;">
+              <span class="material-symbols-outlined" style="font-size:18px; color:rgba(255,255,255,0.7); font-variation-settings: 'FILL' 0, 'wght' 500, 'GRAD' 0, 'opsz' 20;">dashboard_2_gear</span>
+              Admin
+            </p>
+            {#if contextlightCargando}
+              <p style="margin:0; color:rgba(255,255,255,0.6); font-size:0.85rem;">⟳ Cargando...</p>
+            {:else if contextlightGuardado.contexto}
+              <div style="display:grid; grid-template-columns: max-content 1fr; gap: 0.25rem 0.75rem; font-size: 0.88rem; color: rgba(255,255,255,0.9);">
+                <span style="color: rgba(255,255,255,0.6);">Base:</span>
+                <span style="font-weight: 600;">{contextlightGuardado.contexto}</span>
+              </div>
+            {:else}
+              <p style="margin:0; color:rgba(255,255,255,0.5); font-style:italic; font-size:0.9rem;">— Sin configurar — carga una receta desde <strong>.config</strong>.</p>
             {/if}
           </div>
 
-          {#if cargandoContextos}
-            <p style="color: rgba(255,255,255,0.6); font-size: 0.9rem; padding: 0.75rem 0;">⏳ Cargando contextos...</p>
-          {:else if contextos.length === 0}
-            <p style="color: rgba(255,255,255,0.6); font-size: 0.9rem; padding: 0.75rem 0;">No hay bases de conocimiento disponibles. Pulsa ↻ Recargar.</p>
+          {#if lightbotErrorCargar || contextlightErrorCargar}
+            <p style="color: #fff; font-size: 0.85rem; padding: 0.6rem 0.9rem; background: rgba(200,40,40,0.9); border-radius: 6px; margin-top: 0.75rem; font-weight: 500;">
+              ❌ {lightbotErrorCargar || contextlightErrorCargar}
+            </p>
           {/if}
-
-          <p style="color: rgba(255,255,255,0.5); font-size: 0.8rem; margin-top: 1rem;">
-            💾 La selección se guarda en este navegador (localStorage).
-          </p>
         </div>
         {/if}
 
@@ -2750,11 +2817,44 @@
           {:else}
             <div class="contextos-table">
               {#each vectorizacionContextos as ctx (ctx.nombre)}
-                <div class="contexto-row">
-                  <span class="contexto-nombre">{ctx.nombre}</span>
+                <div class="contexto-row" class:base-default={ctx.nombre === lightbotGuardado.contexto}>
+                  <span class="contexto-nombre">
+                    {#if ctx.nombre === lightbotGuardado.contexto}
+                      <span class="material-symbols-outlined" style="font-size:18px; color:#ffd75e; font-variation-settings: 'FILL' 1, 'wght' 500, 'GRAD' 0, 'opsz' 20; vertical-align:middle; margin-right:4px;" title="Base default actual">star</span>
+                    {/if}
+                    {ctx.nombre}
+                  </span>
+                  <span class="base-doc-count" title="Documentos en esta base">
+                    {#if vectorizacionDocCounts[ctx.nombre] === 'cargando' || vectorizacionDocCounts[ctx.nombre] === undefined}
+                      <span class="material-symbols-outlined receta-spin" style="font-size:14px; vertical-align:middle;">progress_activity</span>
+                    {:else if vectorizacionDocCounts[ctx.nombre] === 'error'}
+                      <span style="color:#fca5a5;">— docs ?</span>
+                    {:else}
+                      <span class="material-symbols-outlined" style="font-size:14px; vertical-align:middle; margin-right:3px;">description</span>
+                      {vectorizacionDocCounts[ctx.nombre]} {vectorizacionDocCounts[ctx.nombre] === 1 ? 'doc' : 'docs'}
+                    {/if}
+                  </span>
+                  <button
+                    class="contexto-borrar-btn"
+                    title="Borrar base de conocimiento"
+                    disabled={cargandoBorrarContexto}
+                    onclick={() => { contextoABorrar = ctx.nombre; mostrarConfirmacionBorrar = true; }}
+                  >
+                    <span class="material-symbols-outlined row-icon">delete</span>
+                  </button>
                 </div>
               {/each}
             </div>
+            {#if mensajeBorrarContexto}
+              <p class="mensaje-contexto" class:success={mensajeBorrarContexto.includes('✅')} style="margin-top: 0.5rem; margin-bottom: 0.5rem;">
+                {#if mensajeBorrarContexto.startsWith('✅')}
+                  <span class="material-symbols-outlined success-icon">check_circle</span>
+                  {mensajeBorrarContexto.replace(/^✅\s*/, '')}
+                {:else}
+                  {mensajeBorrarContexto}
+                {/if}
+              </p>
+            {/if}
             <p style="color: rgba(255,255,255,0.5); font-size: 0.8rem; margin-top: 0.75rem;">
               Total: {vectorizacionContextos.length}
             </p>
@@ -2779,6 +2879,28 @@
               style="color: rgba(255,255,255,0.85); font-size: 0.9rem;"
             />
           </div>
+
+          {#if recetaCargadaInfo}
+            <div style="margin-top: 1rem; padding: 0.85rem 1rem; background: rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.12); border-radius: 8px; max-width: 560px;">
+              <p style="margin: 0 0 0.5rem 0; color: rgba(255,255,255,0.7); font-size: 0.78rem; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase;">Receta cargada</p>
+              <div style="display:grid; grid-template-columns: max-content 1fr; gap: 0.3rem 0.75rem; font-size: 0.85rem; color: rgba(255,255,255,0.9);">
+                <span style="color: rgba(255,255,255,0.6);">Nombre:</span>
+                <span style="font-weight: 600;">{recetaCargadaInfo.nombre}</span>
+                <span style="color: rgba(255,255,255,0.6);">Embedding:</span>
+                <span>{recetaCargadaInfo.embedding_model}</span>
+                <span style="color: rgba(255,255,255,0.6);">Chunk size:</span>
+                <span>{recetaCargadaInfo.chunk_size}</span>
+                <span style="color: rgba(255,255,255,0.6);">Modelo LLM:</span>
+                <span>{recetaCargadaInfo.modelo_llm}</span>
+                <span style="color: rgba(255,255,255,0.6);">Historial:</span>
+                <span>{recetaCargadaInfo.historial === 0 ? 'Sin historial' : `${recetaCargadaInfo.historial} turnos`}</span>
+                {#if recetaCargadaInfo.generado}
+                  <span style="color: rgba(255,255,255,0.6);">Generada:</span>
+                  <span style="font-size: 0.78rem; color: rgba(255,255,255,0.65);">{new Date(recetaCargadaInfo.generado).toLocaleString('es-MX')}</span>
+                {/if}
+              </div>
+            </div>
+          {/if}
 
           {#if recetaCargando}
             <p style="color: rgba(255,255,255,0.85); font-size: 0.9rem; margin-top: 0.75rem; display:flex; align-items:center; gap:0.5rem;">
@@ -3663,7 +3785,6 @@
 
   /* ── HOST badge ──────────────────────────────────── */
   .host-badge {
-    margin-left: auto;
     display: inline-flex;
     align-items: center;
     gap: 0.4rem;
@@ -3696,6 +3817,7 @@
     padding: 0;
     border-radius: 0;
     border: none;
+    margin-left: auto;
     border-bottom: 2px solid rgba(255, 255, 255, 0.2);
     align-items: center;
   }
@@ -4974,6 +5096,24 @@
     justify-content: center;
     transition: background 0.15s, transform 0.1s;
     flex-shrink: 0;
+  }
+
+  .base-doc-count {
+    font-size: 0.78rem;
+    color: rgba(255, 255, 255, 0.7);
+    background: rgba(0, 0, 0, 0.25);
+    padding: 0.2rem 0.55rem;
+    border-radius: 12px;
+    margin-left: auto;
+    margin-right: 0.5rem;
+    white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+  }
+
+  .contexto-row.base-default {
+    border: 1px solid rgba(255, 215, 94, 0.5);
+    box-shadow: 0 0 0 1px rgba(255, 215, 94, 0.15) inset;
   }
 
   .copy-toast {
