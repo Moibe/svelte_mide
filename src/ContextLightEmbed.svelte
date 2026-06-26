@@ -215,8 +215,12 @@
         {#if archivo}
           <small class="muted">{(archivo.size / 1024).toFixed(2)} KB</small>
         {/if}
-        <button class="btn-primary" onclick={integrarDocumento} disabled={cargandoIntegrar || !archivo}>
-          {cargandoIntegrar ? `⟳ Procesando ${progreso}%` : '✓ Integrar'}
+        <button class="btn-primary" onclick={integrarDocumento} disabled={cargandoIntegrar || !archivo} style="display:inline-flex; align-items:center; gap:0.35rem;">
+          {#if cargandoIntegrar}
+            ⟳ Procesando {progreso}%
+          {:else}
+            <span class="material-symbols-outlined" style="font-size:18px;">upload</span> Integrar
+          {/if}
         </button>
         {#if cargandoIntegrar}
           <div class="progress"><div class="progress-bar" style="width:{progreso}%"></div></div>

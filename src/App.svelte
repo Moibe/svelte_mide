@@ -2013,8 +2013,13 @@
                 onclick={integrarDocumento}
                 disabled={cargandoIntegrarDocumento || !contextoSeleccionadoParaDocumentos.trim() || !archivoParaIntegrar}
                 class="integrar-documento-btn"
+                style="display:inline-flex; align-items:center; gap:0.35rem;"
               >
-                {cargandoIntegrarDocumento ? '⟳ Procesando...' : '✓ Integrar'}
+                {#if cargandoIntegrarDocumento}
+                  ⟳ Procesando...
+                {:else}
+                  <span class="material-symbols-outlined" style="font-size:18px;">upload</span> Integrar
+                {/if}
               </button>
             </div>
 
