@@ -964,13 +964,13 @@
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `receta-${nombreContextoGenerado}.json`;
+      a.download = `chatbot-${nombreContextoGenerado}.json`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
       recetaError = '';
-      recetaMensaje = `✅ Receta descargada: receta-${nombreContextoGenerado}.json`;
+      recetaMensaje = `✅ Receta descargada: chatbot-${nombreContextoGenerado}.json`;
     } catch (err) {
       recetaError = `❌ No se pudo guardar la receta: ${err.message}`;
     }
