@@ -138,6 +138,12 @@
     }
   }
 
+  // Abre el documento original (PDF) en una pestaña nueva para supervisarlo.
+  function verDocumento(nombre) {
+    const url = `${apiUrl.base}/verDocumento?contexto=${encodeURIComponent(contexto)}&filename=${encodeURIComponent(nombre)}`;
+    window.open(url, '_blank', 'noopener');
+  }
+
   cargarConfig();
 </script>
 
@@ -180,7 +186,10 @@
             {#each documentos as doc (doc)}
               <li class="doc-row">
                 <span><span class="material-symbols-outlined doc-icon">article</span> {doc}</span>
-                <button class="btn-trash" disabled={cargandoBorrar} onclick={() => confirmarBorrar = doc} title="Borrar"><span class="material-symbols-outlined">delete</span></button>
+                <div class="doc-actions">
+                  <button class="btn-eye" onclick={() => verDocumento(doc)} title="Ver documento" aria-label="Ver documento"><span class="material-symbols-outlined">visibility</span></button>
+                  <button class="btn-trash" disabled={cargandoBorrar} onclick={() => confirmarBorrar = doc} title="Borrar"><span class="material-symbols-outlined">delete</span></button>
+                </div>
               </li>
             {/each}
           </ul>
@@ -436,6 +445,35 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .doc-actions {
+    display: flex;
+    gap: 0.35rem;
+    flex-shrink: 0;
+  }
+
+  .btn-eye {
+    background: #f0f2f5;
+    border: 1px solid #d6dde6;
+    border-radius: 6px;
+    padding: 3px 9px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    transition: background 0.15s;
+  }
+  .btn-eye:hover {
+    background: #d4e4f7;
+    border-color: #6b8aaf;
+  }
+  .btn-eye .material-symbols-outlined {
+    font-size: 18px;
+    color: #1f1f1f;
+    font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 20;
+    vertical-align: middle;
+  }
+  .btn-eye:hover .material-symbols-outlined {
+    color: #2563eb;
   }
 
   .btn-trash {
