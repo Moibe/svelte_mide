@@ -89,15 +89,6 @@
     return host || 'desconocido';
   })();
 
-  // True solo cuando estamos corriendo localmente (Vite dev o Vite preview en localhost).
-  // Sirve para gatear features que solo deben existir en desarrollo (ej. crear recetas).
-  const esLocal = (() => {
-    if (typeof window === 'undefined') return false;
-    if (import.meta.env.DEV) return true;
-    const host = window.location.hostname;
-    return host === 'localhost' || host === '127.0.0.1';
-  })();
-
   const apiUrl = (() => {
     if (import.meta.env.DEV) {
       return { real: 'http://127.0.0.1:8080', base: '/api' };
@@ -161,8 +152,8 @@
   let isLoading = $state(false);
   let chatContainer = $state(null);
   let activeTab = $state('vectorizacion');
-  let vectorizacionTab = $state(esLocal ? 'receta' : 'lightbotpanel');
-  let adminTab = $state('cargarreceta');
+  let vectorizacionTab = $state('lightbotpanel');
+  let adminTab = $state('receta');
 
   // Estado para feedback de "URL copiada"
   let urlCopiadaFlashId = $state(null);
@@ -1759,15 +1750,6 @@
 
         <!-- Sub-tab bar -->
         <div class="vectorizacion-subtabs">
-          {#if esLocal}
-            <button
-              class="vectorizacion-subtab-btn"
-              class:active={vectorizacionTab === 'receta'}
-              onclick={() => { vectorizacionTab = 'receta'; cargarModelosEmbedding(); cargarContextosVectorizacion(); }}
-            >
-              <span class="material-symbols-outlined subtab-icon">restaurant_menu</span> Receta
-            </button>
-          {/if}
           <button
             class="vectorizacion-subtab-btn"
             class:active={vectorizacionTab === 'lightbotpanel'}
@@ -2406,8 +2388,92 @@
           </div>
         {/if}
 
-        <!-- Receta — solo en local -->
-        {#if vectorizacionTab === 'receta' && esLocal}
+        <!-- Receta: movida a la sección Configuración (adminTab === 'receta'). -->
+
+      </div>
+      <p class="disclaimer">MIDE · Museo Interactivo de Economía</p>
+    </main>
+  {/if}
+
+  <!-- Modal de confirmación de borrado de Base de Conocimiento (compartido entre vectorizacion y admin) -->
+  {#if mostrarConfirmacionBorrar}
+    <div class="modal-overlay">
+      <div class="modal-content">
+        <h3>⚠️ Confirmar Borrado</h3>
+        <p>
+          ¿Estás seguro de que deseas borrar la base de conocimiento <strong>"{contextoABorrar}"</strong>?
+        </p>
+        <p style="font-size: 0.85rem; color: rgba(255,255,255,0.6);">
+          Esta acción es irreversible.
+        </p>
+        <div class="modal-buttons">
+          <button
+            onclick={() => mostrarConfirmacionBorrar = false}
+            disabled={cargandoBorrarContexto}
+            class="modal-btn cancel"
+          >
+            Cancelar
+          </button>
+          <button
+            onclick={borrarContextoConfirmado}
+            disabled={cargandoBorrarContexto}
+            class="modal-btn danger"
+          >
+            {cargandoBorrarContexto ? '⟳ Borrando...' : 'Sí, borrar'}
+          </button>
+        </div>
+      </div>
+    </div>
+  {/if}
+
+  <!-- Administración section -->
+  {#if activeTab === 'admin'}
+    <main class="vectorizacion-body">
+      <div class="vectorizacion-container">
+        <h2 style="color: white; margin-bottom: 1.5rem; display:flex; align-items:center; gap:0.5rem;"><span class="material-symbols-outlined" style="font-size:28px; font-variation-settings: 'FILL' 0, 'wght' 500, 'GRAD' 0, 'opsz' 24;">admin_panel_settings</span> Administración</h2>
+
+        <!-- Sub-tab bar -->
+        <div class="vectorizacion-subtabs">
+          <button
+            class="vectorizacion-subtab-btn"
+            class:active={adminTab === 'receta'}
+            onclick={() => { adminTab = 'receta'; cargarModelosEmbedding(); cargarContextosVectorizacion(); }}
+          >
+            <span class="material-symbols-outlined subtab-icon">restaurant_menu</span> Receta
+          </button>
+          <button
+            class="vectorizacion-subtab-btn"
+            class:active={adminTab === 'cargarreceta'}
+            onclick={() => { adminTab = 'cargarreceta'; }}
+          >
+            <span class="material-symbols-outlined subtab-icon">upload_file</span> Carga .config
+          </button>
+          <button
+            class="vectorizacion-subtab-btn"
+            class:active={adminTab === 'defaultcontext'}
+            onclick={() => { adminTab = 'defaultcontext'; if (contextos.length === 0) cargarContextos(); }}
+          >
+            <span class="material-symbols-outlined subtab-icon">star</span> DefaultContext
+          </button>
+          <button
+            class="vectorizacion-subtab-btn"
+            class:active={adminTab === 'bases'}
+            onclick={() => { adminTab = 'bases'; cargarContextosVectorizacion(); }}
+          >
+            <span class="material-symbols-outlined subtab-icon">folder</span> Bases
+          </button>
+          <button
+            class="vectorizacion-subtab-btn"
+            class:active={adminTab === 'modelos'}
+            onclick={() => { adminTab = 'modelos'; cargarModelos(); }}
+            style="margin-left: auto;"
+          >
+            <span class="material-symbols-outlined subtab-icon">psychology</span> Modelos
+          </button>
+        </div>
+
+        <!-- Receta -->
+        {#if adminTab === 'receta'}
           <div class="lightbot-wrap">
             <div class="seccion-header">
               <h3><span class="material-symbols-outlined section-icon-h3">restaurant_menu</span> Receta</h3>
@@ -2541,81 +2607,6 @@
             {/if}
           </div>
         {/if}
-
-      </div>
-      <p class="disclaimer">MIDE · Museo Interactivo de Economía</p>
-    </main>
-  {/if}
-
-  <!-- Modal de confirmación de borrado de Base de Conocimiento (compartido entre vectorizacion y admin) -->
-  {#if mostrarConfirmacionBorrar}
-    <div class="modal-overlay">
-      <div class="modal-content">
-        <h3>⚠️ Confirmar Borrado</h3>
-        <p>
-          ¿Estás seguro de que deseas borrar la base de conocimiento <strong>"{contextoABorrar}"</strong>?
-        </p>
-        <p style="font-size: 0.85rem; color: rgba(255,255,255,0.6);">
-          Esta acción es irreversible.
-        </p>
-        <div class="modal-buttons">
-          <button
-            onclick={() => mostrarConfirmacionBorrar = false}
-            disabled={cargandoBorrarContexto}
-            class="modal-btn cancel"
-          >
-            Cancelar
-          </button>
-          <button
-            onclick={borrarContextoConfirmado}
-            disabled={cargandoBorrarContexto}
-            class="modal-btn danger"
-          >
-            {cargandoBorrarContexto ? '⟳ Borrando...' : 'Sí, borrar'}
-          </button>
-        </div>
-      </div>
-    </div>
-  {/if}
-
-  <!-- Administración section -->
-  {#if activeTab === 'admin'}
-    <main class="vectorizacion-body">
-      <div class="vectorizacion-container">
-        <h2 style="color: white; margin-bottom: 1.5rem; display:flex; align-items:center; gap:0.5rem;"><span class="material-symbols-outlined" style="font-size:28px; font-variation-settings: 'FILL' 0, 'wght' 500, 'GRAD' 0, 'opsz' 24;">admin_panel_settings</span> Administración</h2>
-
-        <!-- Sub-tab bar -->
-        <div class="vectorizacion-subtabs">
-          <button
-            class="vectorizacion-subtab-btn"
-            class:active={adminTab === 'cargarreceta'}
-            onclick={() => { adminTab = 'cargarreceta'; }}
-          >
-            <span class="material-symbols-outlined subtab-icon">upload_file</span> Carga .config
-          </button>
-          <button
-            class="vectorizacion-subtab-btn"
-            class:active={adminTab === 'defaultcontext'}
-            onclick={() => { adminTab = 'defaultcontext'; if (contextos.length === 0) cargarContextos(); }}
-          >
-            <span class="material-symbols-outlined subtab-icon">star</span> DefaultContext
-          </button>
-          <button
-            class="vectorizacion-subtab-btn"
-            class:active={adminTab === 'bases'}
-            onclick={() => { adminTab = 'bases'; cargarContextosVectorizacion(); }}
-          >
-            <span class="material-symbols-outlined subtab-icon">folder</span> Bases
-          </button>
-          <button
-            class="vectorizacion-subtab-btn"
-            class:active={adminTab === 'modelos'}
-            onclick={() => { adminTab = 'modelos'; cargarModelos(); }}
-            style="margin-left: auto;"
-          >
-            <span class="material-symbols-outlined subtab-icon">psychology</span> Modelos
-          </button>
-        </div>
 
         <!-- Modelos -->
         {#if adminTab === 'modelos'}
