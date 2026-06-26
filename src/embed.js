@@ -1,3 +1,4 @@
+import './fonts.css';
 import { mount } from 'svelte';
 import Embed from './Embed.svelte';
 

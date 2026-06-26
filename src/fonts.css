@@ -1,0 +1,22 @@
+/*
+ * Fuentes auto-hospedadas (bundleadas por Vite, servidas desde el mismo origen).
+ *
+ * Antes se cargaban desde Google Fonts (fonts.googleapis.com) vía <link> en el
+ * <head>. En redes corporativas sin salida estable a internet (p. ej. el server
+ * interno 172.10.30.15) eso provocaba FOUC: el texto salía con la fuente del
+ * sistema y los íconos de Material Symbols aparecían como su nombre literal
+ * ("smart_toy", "link"...) hasta que la fuente lograba descargar.
+ *
+ * Al auto-hospedarlas, no dependen de internet y el flash desaparece.
+ */
+
+/* Inter — solo los pesos que usa la UI (400/500/600/700). Familia: 'Inter'. */
+@import '@fontsource/inter/400.css';
+@import '@fontsource/inter/500.css';
+@import '@fontsource/inter/600.css';
+@import '@fontsource/inter/700.css';
+
+/* Material Symbols — solo el estilo "outlined" (define el @font-face y la clase
+ * .material-symbols-outlined). El paquete trae rounded/sharp también; no se
+ * importan para no inflar el bundle. */
+@import 'material-symbols/outlined.css';
